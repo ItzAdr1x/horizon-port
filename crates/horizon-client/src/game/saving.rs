@@ -28,6 +28,21 @@ const SNAPSHOTS_PER_FRAME: usize = 16;
 const SNAPSHOT_BUDGET: Duration = Duration::from_millis(2);
 
 impl Game<'_> {
+    /// iOS sends an app to the background and may end it there without `exiting`
+    /// (`applicationWillTerminate` doesn't reach a suspended app): save the world as `save` does.
+    pub(super) fn save_for_background(&mut self) -> Result<()> {
+        if self.title.is_some() || self.pending_save.is_some() {
+            return Ok(());
+        }
+        // Single player's world is its server thread's.
+        if let Some(server) = &self.integrated {
+            server
+                .call(|g| g.save_game().map_err(|e| e.to_string()))
+                .ok_or("the integrated server stopped")??;
+            return Ok(());
+        }
+        self.save_game()
+    }
     pub(super) fn begin_closing_save(&mut self, quit: bool) -> Result<()> {
         if let Some(save) = &mut self.pending_save {
             save.quit |= quit;

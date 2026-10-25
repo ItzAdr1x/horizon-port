@@ -10737,6 +10737,15 @@ impl ApplicationHandler for Game<'_> {
         let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
             attributes, "horizon", "horizon",
         );
+        // iOS: the system's edge swipes (home, Control Center) wait for a second swipe, so the
+        // touch controls along the edges keep the game, and the home indicator hides.
+        #[cfg(target_os = "ios")]
+        let attributes = {
+            use winit::platform::ios::{ScreenEdge, WindowAttributesExtIOS};
+            attributes
+                .with_preferred_screen_edges_deferring_system_gestures(ScreenEdge::ALL)
+                .with_prefers_home_indicator_hidden(true)
+        };
         let window = match event_loop.create_window(
             attributes
                 .with_inner_size(winit::dpi::LogicalSize::new(size[0], size[1]))
@@ -10767,6 +10776,15 @@ impl ApplicationHandler for Game<'_> {
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
+            return;
+        }
+        // Touch controls on iOS, where fingers are the only input; elsewhere touch screens keep
+        // what the system makes of them. First, so every finger's end reaches them: the mouse
+        // events they make go through the checks below.
+        if let WindowEvent::Touch(touch) = event {
+            if cfg!(target_os = "ios") {
+                self.touch_event(event_loop, id, touch);
+            }
             return;
         }
         if let WindowEvent::KeyboardInput { event, .. } = &event
@@ -10875,14 +10893,6 @@ impl ApplicationHandler for Game<'_> {
             }
             return;
         }
-        // Touch controls on iOS, where fingers are the only input; elsewhere touch screens keep
-        // what the system makes of them.
-        if let WindowEvent::Touch(touch) = event {
-            if cfg!(target_os = "ios") {
-                self.touch_event(event_loop, id, touch);
-            }
-            return;
-        }
         let result: Result<()> = (|| {
             match event {
                 WindowEvent::CloseRequested => {
@@ -10893,6 +10903,9 @@ impl ApplicationHandler for Game<'_> {
                         r.resize(size.width, size.height);
                     }
                     self.observe_fullscreen();
+                }
+                WindowEvent::Occluded(true) if cfg!(target_os = "ios") => {
+                    self.save_for_background()?;
                 }
                 WindowEvent::Focused(focused) => {
                     self.focused = focused;
@@ -12933,6 +12946,15 @@ impl Loading {
         let attributes = winit::platform::wayland::WindowAttributesExtWayland::with_name(
             attributes, "horizon", "horizon",
         );
+        // iOS: the system's edge swipes (home, Control Center) wait for a second swipe, so the
+        // touch controls along the edges keep the game, and the home indicator hides.
+        #[cfg(target_os = "ios")]
+        let attributes = {
+            use winit::platform::ios::{ScreenEdge, WindowAttributesExtIOS};
+            attributes
+                .with_preferred_screen_edges_deferring_system_gestures(ScreenEdge::ALL)
+                .with_prefers_home_indicator_hidden(true)
+        };
         let window = match event_loop.create_window(
             attributes
                 .with_inner_size(winit::dpi::LogicalSize::new(size[0], size[1]))
@@ -13126,6 +13148,7 @@ impl Loading {
         game.fullscreen = self.fullscreen;
         game.panorama_rotation = self.panorama_rotation;
         self.menu.handoff(&mut game);
+        game.touch = std::mem::take(&mut self.touch);
         game.apply_settings();
         game.previous = Instant::now();
         log::info!(

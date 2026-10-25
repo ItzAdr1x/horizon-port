@@ -21,7 +21,8 @@ pub const MAX_ARCHIVES_PER_DAY: u32 = 7;
 /// Formatted lines kept in memory for crash reports.
 const RECENT: usize = 50;
 
-/// The platform data folder (what the `dirs` crate's data_dir gives).
+/// The platform data folder: what the `dirs` crate's data_dir gives, and on iOS the app's
+/// Documents.
 pub fn data_dir() -> PathBuf {
     let env = |k: &str| {
         std::env::var_os(k)

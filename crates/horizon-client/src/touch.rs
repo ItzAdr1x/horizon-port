@@ -2,9 +2,10 @@
 //! screen and in menus a finger is the mouse pointer, and in a world's menus a Back button does
 //! what Escape does. In play the screen carries Bedrock Edition's touch controls: a joystick
 //! that appears under the left thumb (pushed all the way forward it sprints), the rest of the
-//! screen turning the view, where a tap uses the held item and a finger held still attacks and
-//! mines, the hotbar's slots selecting themselves, and buttons to jump, use, sneak (a toggle),
-//! open the inventory and pause. Nothing is drawn until a finger first touches the screen.
+//! screen turning the view, where a tap attacks the mob under the crosshair or uses the held item
+//! and a finger held still attacks and mines, the hotbar's slots selecting themselves, and buttons
+//! to jump, use, sneak (a toggle), open the inventory and pause. Nothing is drawn until a finger
+//! first touches the screen.
 //!
 //! This module is the state machine and the drawing; the game applies its `Input`s.
 
@@ -15,6 +16,9 @@ use crate::ui_theme::{self, Face, Ui, color};
 
 /// A finger held still on the view this long attacks.
 const HOLD: Duration = Duration::from_millis(300);
+/// A button stays down at least this long: the game samples held keys once a tick (50 ms), so a
+/// quicker tap could fall between two ticks and do nothing.
+const MIN_PRESS: Duration = Duration::from_millis(100);
 /// How far (dp) a finger on the view may drift and still tap or hold.
 const SLOP: f32 = 12.0;
 /// The joystick's reach (dp): a finger this far from where it landed tilts it all the way.
@@ -41,6 +45,8 @@ pub enum Phase {
     Start,
     Move,
     End,
+    /// The system took the touch (a call, a system gesture): let go without tapping.
+    Cancel,
 }
 
 /// What the screen shows, which decides what a finger does.
@@ -105,6 +111,12 @@ pub enum Input {
     Look([f64; 2]),
     /// A vanilla key mapping pressed or released.
     Mapping(&'static str, bool),
+    /// The joystick wants to sprint, or no longer: a state, not a key edge.
+    Sprint(bool),
+    /// The Sneak button: sneaking flips.
+    Sneak,
+    /// A quick still tap on the view: an attack on the mob under the crosshair, else a use.
+    Tap,
     Hotbar(u8),
     /// What Escape does: pause, or leave a menu.
     Back,
@@ -127,11 +139,27 @@ enum Role {
         still: bool,
         attacking: bool,
     },
-    Button(Button),
+    Button {
+        button: Button,
+        pressed: Instant,
+    },
     Hotbar,
     /// A finger that does nothing until it lifts: a second one on a menu, or one the screen
     /// changed under.
     Spent,
+}
+
+impl Role {
+    /// The key mapping this finger holds down.
+    fn holds(&self) -> Option<&'static str> {
+        match *self {
+            Role::Button { button, .. } => button.mapping(),
+            Role::Look {
+                attacking: true, ..
+            } => Some("key.attack"),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -166,30 +194,32 @@ impl Layout {
     fn screen(&self) -> [f32; 2] {
         [self.size[0] / self.dp, self.size[1] / self.dp]
     }
-    /// The hotbar in GUI pixels (`Hud.extractItemHotbar`): left edge and top.
-    fn hotbar(&self) -> (f32, f32) {
+    /// The hotbar in dp (`Hud.extractItemHotbar`): x, y, width, height.
+    fn hotbar(&self) -> [f32; 4] {
         let w = (self.size[0] / self.gui).ceil() as i32;
         let h = (self.size[1] / self.gui).ceil() as i32;
-        ((w / 2 - 91) as f32, (h - 22) as f32)
+        let gui = self.gui / self.dp;
+        [
+            (w / 2 - 91) as f32 * gui,
+            (h - 22) as f32 * gui,
+            182.0 * gui,
+            22.0 * gui,
+        ]
     }
-    /// A button's rectangle in dp: x, y, width, height.
+    /// A button's rectangle in dp: x, y, width, height. Jump sits in the corner, Use above it and
+    /// Sneak beside Use, clear of the hotbar's row; the inventory button closes the hotbar.
     fn rect(&self, button: Button) -> [f32; 4] {
         let [w, h] = self.screen();
         let right = w - MARGIN - BUTTON;
         let bottom = h - MARGIN - BUTTON;
+        let above = bottom - GAP - BUTTON;
         match button {
             Button::Jump => [right, bottom, BUTTON, BUTTON],
-            Button::Use => [right, bottom - GAP - BUTTON, BUTTON, BUTTON],
-            Button::Sneak => [right - GAP - BUTTON, bottom, BUTTON, BUTTON],
+            Button::Use => [right, above, BUTTON, BUTTON],
+            Button::Sneak => [right - GAP - BUTTON, above, BUTTON, BUTTON],
             Button::Inventory => {
-                let (x, y) = self.hotbar();
-                let side = 22.0 * self.gui / self.dp;
-                [
-                    (x + 182.0) * self.gui / self.dp + GAP / 2.0,
-                    y * self.gui / self.dp,
-                    side,
-                    side,
-                ]
+                let [x, y, width, height] = self.hotbar();
+                [x + width + GAP / 2.0, y, height, height]
             }
             Button::Pause => [
                 w - MARGIN - SMALL_BUTTON,
@@ -205,10 +235,13 @@ impl Layout {
         (x..x + w).contains(&at[0]) && (y..y + h).contains(&at[1])
     }
     fn hotbar_slot(&self, at: [f64; 2]) -> Option<u8> {
-        let (x0, y0) = self.hotbar();
-        let (x, y) = (at[0] as f32 / self.gui, at[1] as f32 / self.gui);
-        ((x0..x0 + 182.0).contains(&x) && y >= y0)
-            .then(|| ((x - x0 - 1.0) / 20.0).floor().clamp(0.0, 8.0) as u8)
+        let [x, y, w, _] = self.hotbar();
+        let at = self.dp(at);
+        ((x..x + w).contains(&at[0]) && at[1] >= y).then(|| {
+            ((at[0] - x) / w * 182.0 - 1.0)
+                .div_euclid(20.0)
+                .clamp(0.0, 8.0) as u8
+        })
     }
     /// Where the joystick rests while no thumb holds it (dp).
     fn stick_home(&self) -> [f32; 2] {
@@ -224,7 +257,8 @@ pub struct Touch {
     /// The joystick: x right, y forward, each -1..1.
     stick: [f32; 2],
     sprinting: bool,
-    sneaking: bool,
+    /// Button releases held back until the press has lasted `MIN_PRESS`.
+    late: Vec<(Instant, &'static str)>,
     /// A finger has touched the screen: the controls are drawn from then on.
     seen: bool,
 }
@@ -245,6 +279,11 @@ impl Touch {
         self.seen && self.mode == Mode::Playing
     }
 
+    /// A finger is on the screen: the player is playing, not away.
+    pub fn active(&self) -> bool {
+        !self.fingers.is_empty()
+    }
+
     pub fn touch(
         &mut self,
         layout: &Layout,
@@ -259,7 +298,7 @@ impl Touch {
             (Phase::Start, _) => {
                 if let Some(i) = index {
                     let finger = self.fingers.remove(i);
-                    self.lift(finger.role, at, now, &mut out);
+                    self.release(finger.role, now, &mut out);
                 }
                 self.seen = true;
                 let role = self.land(layout, at, now, &mut out);
@@ -274,39 +313,65 @@ impl Touch {
                 let finger = self.fingers.remove(i);
                 self.lift(finger.role, at, now, &mut out);
             }
-            (Phase::Move | Phase::End, None) => {}
+            (Phase::Cancel, Some(i)) => {
+                let finger = self.fingers.remove(i);
+                self.release(finger.role, now, &mut out);
+            }
+            (Phase::Move | Phase::End | Phase::Cancel, None) => {}
         }
         out
     }
 
-    /// Once a frame: what the screen shows now, and the fingers held long enough to attack.
+    /// Once a frame: what the screen shows now, the releases held back, and the fingers held
+    /// long enough to attack.
     pub fn frame(&mut self, mode: Mode, now: Instant) -> Vec<Input> {
         let mut out = Vec::new();
         if mode != self.mode {
             // What fingers held stops with the screen they held it on.
-            for i in 0..self.fingers.len() {
-                let role = std::mem::replace(&mut self.fingers[i].role, Role::Spent);
-                self.release(role, &mut out);
+            let roles: Vec<Role> = self
+                .fingers
+                .iter_mut()
+                .map(|f| std::mem::replace(&mut f.role, Role::Spent))
+                .collect();
+            for role in roles {
+                self.release(role, now, &mut out);
             }
-            if self.sneaking {
-                out.push(Input::Mapping("key.sneak", mode == Mode::Playing));
+            for (_, mapping) in self.late.drain(..) {
+                out.push(Input::Mapping(mapping, false));
             }
             self.mode = mode;
         }
+        let due: Vec<&'static str> = self
+            .late
+            .iter()
+            .filter(|(at, _)| *at <= now)
+            .map(|(_, mapping)| *mapping)
+            .collect();
+        self.late.retain(|(at, _)| *at > now);
+        out.extend(due.into_iter().map(|m| Input::Mapping(m, false)));
+        let mut attacking = self.held("key.attack");
         for finger in &mut self.fingers {
             if let Role::Look {
                 landed,
                 still: true,
-                attacking: attacking @ false,
+                attacking: held @ false,
                 ..
             } = &mut finger.role
                 && now.duration_since(*landed) >= HOLD
             {
-                *attacking = true;
-                out.push(Input::Mapping("key.attack", true));
+                *held = true;
+                if !std::mem::replace(&mut attacking, true) {
+                    out.push(Input::Mapping("key.attack", true));
+                }
             }
         }
         out
+    }
+
+    /// A finger holds `mapping` down, or a release of it waits.
+    fn held(&self, mapping: &str) -> bool {
+        self.fingers.iter().any(|f| f.role.holds() == Some(mapping))
+            || self.late.iter().any(|(_, m)| *m == mapping)
     }
 
     fn land(&mut self, layout: &Layout, at: [f64; 2], now: Instant, out: &mut Vec<Input>) -> Role {
@@ -314,7 +379,7 @@ impl Touch {
         if self.mode != Mode::Playing {
             if self.mode == Mode::Menu && layout.on(Button::Back, dp) {
                 out.push(Input::Back);
-                return Role::Button(Button::Back);
+                return Role::Spent;
             }
             if self
                 .fingers
@@ -331,20 +396,32 @@ impl Touch {
         }
         if let Some(button) = Button::IN_PLAY.into_iter().find(|b| layout.on(*b, dp)) {
             match button {
-                Button::Sneak => {
-                    self.sneaking = !self.sneaking;
-                    out.push(Input::Mapping("key.sneak", self.sneaking));
-                }
+                Button::Sneak => out.push(Input::Sneak),
                 Button::Pause => out.push(Input::Back),
-                _ => out.extend(button.mapping().map(|m| Input::Mapping(m, true))),
+                _ => {}
             }
-            return Role::Button(button);
+            if let Some(mapping) = button.mapping() {
+                // Pressed again before its held-back release: it simply stays down.
+                if let Some(i) = self.late.iter().position(|(_, m)| *m == mapping) {
+                    self.late.remove(i);
+                } else if !self.held(mapping) {
+                    out.push(Input::Mapping(mapping, true));
+                }
+            }
+            return Role::Button {
+                button,
+                pressed: now,
+            };
         }
         if let Some(slot) = layout.hotbar_slot(at) {
             out.push(Input::Hotbar(slot));
             return Role::Hotbar;
         }
-        if dp[0] < layout.screen()[0] * STICK_SHARE {
+        let stick_taken = self
+            .fingers
+            .iter()
+            .any(|f| matches!(f.role, Role::Stick { .. }));
+        if dp[0] < layout.screen()[0] * STICK_SHARE && !stick_taken {
             return Role::Stick { origin: dp };
         }
         Role::Look {
@@ -373,7 +450,7 @@ impl Touch {
                 let sprint = self.stick[1] >= SPRINT_TILT;
                 if sprint != self.sprinting {
                     self.sprinting = sprint;
-                    out.push(Input::Mapping("key.sprint", sprint));
+                    out.push(Input::Sprint(sprint));
                 }
             }
             Role::Look {
@@ -390,24 +467,24 @@ impl Touch {
                 }
             }
             Role::Hotbar => out.extend(layout.hotbar_slot(at).map(Input::Hotbar)),
-            Role::Button(_) | Role::Spent => {}
+            Role::Button { .. } | Role::Spent => {}
         }
     }
 
+    /// A finger leaves the screen where it was.
     fn lift(&mut self, role: Role, at: [f64; 2], now: Instant, out: &mut Vec<Input>) {
         match role {
             Role::Pointer { .. } => Self::lift_pointer(at, out),
-            // A tap uses the held item: a click of the right button.
+            // The Use button already uses.
             Role::Look {
                 landed,
                 still: true,
                 attacking: false,
                 ..
-            } if now.duration_since(landed) < HOLD => {
-                out.push(Input::Mapping("key.use", true));
-                out.push(Input::Mapping("key.use", false));
+            } if now.duration_since(landed) < HOLD && !self.held("key.use") => {
+                out.push(Input::Tap);
             }
-            role => self.release(role, out),
+            role => self.release(role, now, out),
         }
     }
 
@@ -422,33 +499,42 @@ impl Touch {
         });
     }
 
-    /// Let go of what a finger holds down.
-    fn release(&mut self, role: Role, out: &mut Vec<Input>) {
+    /// Let go of what a finger holds down, once no other finger holds it.
+    fn release(&mut self, role: Role, now: Instant, out: &mut Vec<Input>) {
         match role {
             Role::Pointer { at } => Self::lift_pointer(at, out),
             Role::Stick { .. } => {
                 self.stick = [0.0, 0.0];
                 if std::mem::take(&mut self.sprinting) {
-                    out.push(Input::Mapping("key.sprint", false));
+                    out.push(Input::Sprint(false));
                 }
             }
-            Role::Look {
-                attacking: true, ..
-            } => out.push(Input::Mapping("key.attack", false)),
-            Role::Button(button) => {
-                out.extend(button.mapping().map(|m| Input::Mapping(m, false)));
+            Role::Button { pressed, .. }
+            | Role::Look {
+                landed: pressed, ..
+            } => {
+                let Some(mapping) = role.holds().filter(|m| !self.held(m)) else {
+                    return;
+                };
+                let due = pressed + MIN_PRESS;
+                if matches!(role, Role::Button { .. }) && due > now && self.mode == Mode::Playing {
+                    self.late.push((due, mapping));
+                } else {
+                    out.push(Input::Mapping(mapping, false));
+                }
             }
-            Role::Look { .. } | Role::Hotbar | Role::Spent => {}
+            Role::Hotbar | Role::Spent => {}
         }
     }
 
-    pub fn draw(&self, ui: &mut Ui, layout: &Layout) {
+    /// The controls, once a finger has touched the screen. `sneaking` lights the Sneak button.
+    pub fn draw(&self, ui: &mut Ui, layout: &Layout, sneaking: bool) {
         if !self.seen {
             return;
         }
         match self.mode {
             Mode::Title => {}
-            Mode::Menu => self.draw_button(ui, layout, Button::Back),
+            Mode::Menu => self.draw_button(ui, layout, Button::Back, false),
             Mode::Playing => {
                 let origin = self.fingers.iter().find_map(|f| match f.role {
                     Role::Stick { origin } => Some(origin),
@@ -476,19 +562,19 @@ impl Touch {
                     color::TEXT,
                 );
                 for button in Button::IN_PLAY {
-                    self.draw_button(ui, layout, button);
+                    self.draw_button(ui, layout, button, button == Button::Sneak && sneaking);
                 }
             }
         }
     }
 
-    fn draw_button(&self, ui: &mut Ui, layout: &Layout, button: Button) {
+    fn draw_button(&self, ui: &mut Ui, layout: &Layout, button: Button, on: bool) {
         let [x, y, w, h] = layout.rect(button);
         let held = self
             .fingers
             .iter()
-            .any(|f| matches!(f.role, Role::Button(b) if b == button));
-        let (plate, ink) = if held || (button == Button::Sneak && self.sneaking) {
+            .any(|f| matches!(f.role, Role::Button { button: b, .. } if b == button));
+        let (plate, ink) = if held || on {
             (color::ACCENT, color::ON_ACCENT)
         } else {
             (color::with_alpha(color::BG, PLATE), color::TEXT)
@@ -531,6 +617,8 @@ mod tests {
         let [x, y, w, h] = layout.rect(button);
         px(layout, [x + w / 2.0, y + h / 2.0])
     }
+
+    const VIEW: [f64; 2] = [2000.0, 500.0];
 
     #[test]
     fn a_finger_on_a_menu_is_the_pointer_and_a_second_one_does_nothing() {
@@ -594,19 +682,15 @@ mod tests {
     }
 
     #[test]
-    fn a_tap_on_the_view_uses_and_a_held_finger_attacks_until_lifted() {
+    fn a_tap_on_the_view_taps_and_a_held_finger_attacks_until_lifted() {
         let (mut touch, layout, now) = playing();
-        let view = [2000.0, 500.0];
-        assert!(touch.touch(&layout, 1, Phase::Start, view, now).is_empty());
+        assert!(touch.touch(&layout, 1, Phase::Start, VIEW, now).is_empty());
         assert_eq!(
-            touch.touch(&layout, 1, Phase::End, view, now + HOLD / 2),
-            [
-                Input::Mapping("key.use", true),
-                Input::Mapping("key.use", false)
-            ]
+            touch.touch(&layout, 1, Phase::End, VIEW, now + HOLD / 2),
+            [Input::Tap]
         );
 
-        touch.touch(&layout, 2, Phase::Start, view, now);
+        touch.touch(&layout, 2, Phase::Start, VIEW, now);
         assert!(touch.frame(Mode::Playing, now + HOLD / 2).is_empty());
         assert_eq!(
             touch.frame(Mode::Playing, now + HOLD),
@@ -614,15 +698,28 @@ mod tests {
         );
         assert!(touch.frame(Mode::Playing, now + HOLD * 2).is_empty());
         assert_eq!(
-            touch.touch(&layout, 2, Phase::End, view, now + HOLD * 3),
+            touch.touch(&layout, 2, Phase::End, VIEW, now + HOLD * 3),
             [Input::Mapping("key.attack", false)]
         );
     }
 
     #[test]
-    fn dragging_the_view_turns_it_and_neither_uses_nor_attacks() {
+    fn a_cancelled_touch_lets_go_without_tapping() {
         let (mut touch, layout, now) = playing();
-        touch.touch(&layout, 1, Phase::Start, [2000.0, 500.0], now);
+        touch.touch(&layout, 1, Phase::Start, VIEW, now);
+        assert!(touch.touch(&layout, 1, Phase::Cancel, VIEW, now).is_empty());
+        touch.touch(&layout, 2, Phase::Start, VIEW, now);
+        touch.frame(Mode::Playing, now + HOLD);
+        assert_eq!(
+            touch.touch(&layout, 2, Phase::Cancel, VIEW, now + HOLD),
+            [Input::Mapping("key.attack", false)]
+        );
+    }
+
+    #[test]
+    fn dragging_the_view_turns_it_and_neither_taps_nor_attacks() {
+        let (mut touch, layout, now) = playing();
+        touch.touch(&layout, 1, Phase::Start, VIEW, now);
         assert_eq!(
             touch.touch(&layout, 1, Phase::Move, [2100.0, 460.0], now),
             [Input::Look([50.0, -20.0])]
@@ -652,43 +749,93 @@ mod tests {
         let far_forward = px(&layout, [landed[0], landed[1] - 3.0 * STICK_REACH]);
         assert_eq!(
             touch.touch(&layout, 1, Phase::Move, far_forward, now),
-            [Input::Mapping("key.sprint", true)]
+            [Input::Sprint(true)]
         );
         let [x, y] = touch.stick().unwrap();
         assert!(x.abs() < 1e-3 && (y - 1.0).abs() < 1e-3, "{x} {y}");
         assert_eq!(
             touch.touch(&layout, 1, Phase::End, far_forward, now),
-            [Input::Mapping("key.sprint", false)]
+            [Input::Sprint(false)]
         );
         assert_eq!(touch.stick(), None);
     }
 
     #[test]
-    fn buttons_hold_their_mapping_and_sneak_toggles() {
+    fn a_second_thumb_on_the_left_turns_the_view_and_leaves_the_joystick_alone() {
+        let (mut touch, layout, now) = playing();
+        touch.touch(&layout, 1, Phase::Start, px(&layout, [300.0, 500.0]), now);
+        touch.touch(&layout, 1, Phase::Move, px(&layout, [300.0, 300.0]), now);
+        let (from, to) = (px(&layout, [200.0, 300.0]), px(&layout, [210.0, 300.0]));
+        touch.touch(&layout, 2, Phase::Start, from, now);
+        assert_eq!(
+            touch.touch(&layout, 2, Phase::Move, to, now),
+            [Input::Look([(to[0] - from[0]) * LOOK_SPEED, 0.0])]
+        );
+        touch.touch(&layout, 2, Phase::End, to, now);
+        assert!(touch.stick().is_some_and(|[_, y]| y > 0.9));
+    }
+
+    #[test]
+    fn buttons_hold_their_mapping_at_least_a_tick_and_sneak_flips() {
         let (mut touch, layout, now) = playing();
         let jump = centre(&layout, Button::Jump);
         assert_eq!(
             touch.touch(&layout, 1, Phase::Start, jump, now),
             [Input::Mapping("key.jump", true)]
         );
+        // A quick tap: released once it has lasted MIN_PRESS.
+        assert!(touch.touch(&layout, 1, Phase::End, jump, now).is_empty());
+        assert!(touch.frame(Mode::Playing, now + MIN_PRESS / 2).is_empty());
         assert_eq!(
-            touch.touch(&layout, 1, Phase::End, jump, now),
+            touch.frame(Mode::Playing, now + MIN_PRESS),
+            [Input::Mapping("key.jump", false)]
+        );
+        let later = now + MIN_PRESS * 2;
+        touch.touch(&layout, 2, Phase::Start, jump, later);
+        assert_eq!(
+            touch.touch(&layout, 2, Phase::End, jump, later + MIN_PRESS),
             [Input::Mapping("key.jump", false)]
         );
         let sneak = centre(&layout, Button::Sneak);
         assert_eq!(
-            touch.touch(&layout, 2, Phase::Start, sneak, now),
-            [Input::Mapping("key.sneak", true)]
-        );
-        assert!(touch.touch(&layout, 2, Phase::End, sneak, now).is_empty());
-        assert_eq!(
             touch.touch(&layout, 3, Phase::Start, sneak, now),
-            [Input::Mapping("key.sneak", false)]
+            [Input::Sneak]
         );
+        assert!(touch.touch(&layout, 3, Phase::End, sneak, now).is_empty());
         let pause = centre(&layout, Button::Pause);
         assert_eq!(
             touch.touch(&layout, 4, Phase::Start, pause, now),
             [Input::Back]
+        );
+    }
+
+    #[test]
+    fn a_mapping_two_fingers_hold_is_released_by_the_last_one() {
+        let (mut touch, layout, now) = playing();
+        let use_button = centre(&layout, Button::Use);
+        touch.touch(&layout, 1, Phase::Start, use_button, now);
+        // A tap on the view while Use is held neither taps nor lets go of use.
+        touch.touch(&layout, 2, Phase::Start, VIEW, now);
+        assert!(touch.touch(&layout, 2, Phase::End, VIEW, now).is_empty());
+        // Two fingers attacking: one press, and the release when both have lifted.
+        touch.touch(&layout, 3, Phase::Start, VIEW, now);
+        touch.touch(&layout, 4, Phase::Start, [2200.0, 500.0], now);
+        assert_eq!(
+            touch.frame(Mode::Playing, now + HOLD),
+            [Input::Mapping("key.attack", true)]
+        );
+        assert!(
+            touch
+                .touch(&layout, 3, Phase::End, VIEW, now + HOLD)
+                .is_empty()
+        );
+        assert_eq!(
+            touch.touch(&layout, 4, Phase::End, VIEW, now + HOLD),
+            [Input::Mapping("key.attack", false)]
+        );
+        assert_eq!(
+            touch.touch(&layout, 1, Phase::End, use_button, now + HOLD),
+            [Input::Mapping("key.use", false)]
         );
     }
 
@@ -711,7 +858,7 @@ mod tests {
     fn leaving_play_lets_go_of_everything_held() {
         let (mut touch, layout, now) = playing();
         touch.touch(&layout, 1, Phase::Start, centre(&layout, Button::Jump), now);
-        touch.touch(&layout, 2, Phase::Start, [2000.0, 500.0], now);
+        touch.touch(&layout, 2, Phase::Start, VIEW, now);
         touch.frame(Mode::Playing, now + HOLD);
         touch.touch(&layout, 3, Phase::Start, px(&layout, [300.0, 500.0]), now);
         let released = touch.frame(Mode::Menu, now + HOLD);
@@ -723,10 +870,62 @@ mod tests {
             ]
         );
         assert_eq!(touch.stick(), None);
-        assert!(
-            touch
-                .touch(&layout, 2, Phase::End, [2000.0, 500.0], now)
-                .is_empty()
-        );
+        assert!(touch.touch(&layout, 2, Phase::End, VIEW, now).is_empty());
+    }
+
+    /// Phones and tablets in landscape, from an iPhone SE to a 13-inch iPad Pro.
+    const SCREENS: [[u32; 2]; 6] = [
+        [1334, 750],
+        [2556, 1179],
+        [2868, 1320],
+        [2853, 2007],
+        [2266, 1488],
+        [2752, 2064],
+    ];
+
+    #[test]
+    fn the_controls_fit_every_screen_without_overlapping() {
+        let overlap = |a: [f32; 4], b: [f32; 4]| {
+            a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+        };
+        for [w, h] in SCREENS {
+            let layout = Layout::new(w, h);
+            let [sw, sh] = layout.screen();
+            let [cx, cy] = layout.stick_home();
+            let stick = [
+                cx - STICK_REACH,
+                cy - STICK_REACH,
+                2.0 * STICK_REACH,
+                2.0 * STICK_REACH,
+            ];
+            let rects: Vec<[f32; 4]> = Button::IN_PLAY.iter().map(|b| layout.rect(*b)).collect();
+            for (i, a) in rects.iter().enumerate() {
+                // The hotbar and its button reach the bottom edge, rounded up to a GUI pixel.
+                let slack = layout.gui / layout.dp;
+                assert!(
+                    a[0] >= 0.0 && a[1] >= 0.0 && a[0] + a[2] <= sw && a[1] + a[3] <= sh + slack,
+                    "{w}x{h}: {:?} leaves the screen",
+                    Button::IN_PLAY[i]
+                );
+                assert!(
+                    !overlap(*a, layout.hotbar()),
+                    "{w}x{h}: {:?} on the hotbar",
+                    Button::IN_PLAY[i]
+                );
+                assert!(
+                    !overlap(*a, stick),
+                    "{w}x{h}: {:?} on the joystick",
+                    Button::IN_PLAY[i]
+                );
+                for (j, b) in rects.iter().enumerate().skip(i + 1) {
+                    assert!(
+                        !overlap(*a, *b),
+                        "{w}x{h}: {:?} and {:?} overlap",
+                        Button::IN_PLAY[i],
+                        Button::IN_PLAY[j]
+                    );
+                }
+            }
+        }
     }
 }

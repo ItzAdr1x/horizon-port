@@ -330,10 +330,10 @@ pub const COMMANDS: &[Cmd] = &[
         "Buttons by position: south east west north lb rb lt rt select start ls rs up down left right (south is Xbox A / PlayStation cross). Sticks run -1..1 with up positive and stay tilted until centred; triggers 0..1. Merged with any real controller; status lists the connected ones and what is held.",
         ["horizon-ctl pad south tap", "horizon-ctl pad stick left 0 1", "horizon-ctl pad trigger right 1", "horizon-ctl pad status"],
         &[p("what", Ty::Str, "a button name, stick, trigger, release or status"), opt("a", Ty::Str, "down|up|tap, or left|right"), opt("b", Ty::Num, "stick X or trigger value"), opt("c", Ty::Num, "stick Y")], mcp: true, local: false),
-    cmd!("touch", Act, "touch start|move|end ID X Y", "a finger on a touch screen at GUI pixels X Y, as an iPhone or iPad reports one",
-        "ID tells fingers apart. On menus a finger is the pointer; in play the touch controls take it: the joystick on the left 40 % of the screen, the hotbar, the buttons, and the view everywhere else, where a tap uses the held item and a finger held 0.3 s attacks until it lifts (ios.md).",
+    cmd!("touch", Act, "touch start|move|end|cancel ID X Y", "a finger on a touch screen at GUI pixels X Y, as an iPhone or iPad reports one",
+        "ID tells fingers apart; cancel is the system taking the touch, which lets go without tapping. On menus a finger is the pointer; in play the touch controls take it: the joystick on the left 40 % of the screen, the hotbar, the buttons, and the view everywhere else, where a tap attacks the mob under the crosshair or uses the held item and a finger held 0.3 s attacks until it lifts (ios.md).",
         ["horizon-ctl touch start 1 250 100", "horizon-ctl touch move 1 260 100", "horizon-ctl touch end 1 260 100"],
-        &[p("phase", Ty::Enum(&["start", "move", "end"]), "what the finger does"), p("id", Ty::Int, "the finger"), p("x", Ty::Num, "GUI pixels from the left"), p("y", Ty::Num, "GUI pixels from the top")], mcp: false, local: false),
+        &[p("phase", Ty::Enum(&["start", "move", "end", "cancel"]), "what the finger does"), p("id", Ty::Int, "the finger"), p("x", Ty::Num, "GUI pixels from the left"), p("y", Ty::Num, "GUI pixels from the top")], mcp: false, local: false),
     cmd!("release", Act, "release", "release every key and mouse button", "", ["horizon-ctl release"], &[], mcp: true, local: false),
     cmd!("stop", Act, "stop", "cancel the running action (goto, break...) and release every key", "", ["horizon-ctl stop"], &[], mcp: true, local: false),
     // Screens

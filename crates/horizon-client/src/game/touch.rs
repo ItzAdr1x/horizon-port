@@ -4,6 +4,7 @@ use super::{Game, Loading, Screen};
 use horizon_client::{
     Result,
     hud::HudBatch,
+    keymapping::{SNEAK, SPRINT},
     touch::{Input, Layout, Mode, Phase},
 };
 use serde_json::{Value, json};
@@ -16,14 +17,16 @@ use winit::{
     window::WindowId,
 };
 
-pub(super) const HELP: &[&str] =
-    &["touch start|move|end ID X Y    a finger at GUI pixels X Y, as a touch screen reports it"];
+pub(super) const HELP: &[&str] = &[
+    "touch start|move|end|cancel ID X Y    a finger at GUI pixels X Y, as a touch screen reports it",
+];
 
 fn phase(phase: TouchPhase) -> Phase {
     match phase {
         TouchPhase::Started => Phase::Start,
         TouchPhase::Moved => Phase::Move,
-        TouchPhase::Ended | TouchPhase::Cancelled => Phase::End,
+        TouchPhase::Ended => Phase::End,
+        TouchPhase::Cancelled => Phase::Cancel,
     }
 }
 
@@ -57,6 +60,7 @@ impl Game<'_> {
     }
 
     pub(super) fn touch_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, touch: Touch) {
+        self.last_input = Instant::now();
         let Some(layout) = self.touch_layout() else {
             return;
         };
@@ -74,11 +78,15 @@ impl Game<'_> {
         };
         let mode = if self.title.is_some() {
             Mode::Title
-        } else if self.pad_in_menu() {
+        } else if self.pad_in_menu() || self.server_packs.prompt.is_some() {
             Mode::Menu
         } else {
             Mode::Playing
         };
+        // A thumb resting on the joystick is play, as a tilted stick is (`poll_pads`).
+        if self.touch.active() {
+            self.last_input = Instant::now();
+        }
         let inputs = self.touch.frame(mode, Instant::now());
         self.apply_touch(event_loop, id, DeviceId::dummy(), inputs);
     }
@@ -91,9 +99,6 @@ impl Game<'_> {
         inputs: Vec<Input>,
     ) {
         for input in inputs {
-            if !matches!(input, Input::Look(_)) {
-                self.last_input = Instant::now();
-            }
             let result = match input {
                 Input::Pointer { at, pressed } => {
                     for event in pointer_events(device_id, at, pressed) {
@@ -106,6 +111,9 @@ impl Game<'_> {
                     Ok(())
                 }
                 Input::Mapping(mapping, down) => self.mapping_action(mapping, down),
+                Input::Sprint(on) => self.touch_sprint(on),
+                Input::Sneak => self.touch_sneak(),
+                Input::Tap => self.touch_tap(),
                 Input::Hotbar(slot) => {
                     if self.screen == Screen::Playing {
                         self.selected = usize::from(slot);
@@ -120,10 +128,48 @@ impl Game<'_> {
         }
     }
 
+    /// Sprinting as the joystick wants it. Under Sprint: Toggle a press flips sprinting and a
+    /// release does nothing, so a press goes out only when the state must change.
+    fn touch_sprint(&mut self, on: bool) -> Result<()> {
+        if !self.settings.toggle_sprint {
+            return self.mapping_action("key.sprint", on);
+        }
+        if self.toggles.is_down(SPRINT) != on {
+            self.mapping_action("key.sprint", true)?;
+            self.mapping_action("key.sprint", false)?;
+        }
+        Ok(())
+    }
+
+    /// The Sneak button flips sneaking: under Sneak: Toggle a press does, as for the pad's stick
+    /// click (`pad_action`); otherwise the key stays down until the next tap.
+    fn touch_sneak(&mut self) -> Result<()> {
+        if self.settings.toggle_crouch {
+            self.mapping_action("key.sneak", true)?;
+            self.mapping_action("key.sneak", false)
+        } else {
+            let sneaking = self.toggles.is_down(SNEAK);
+            self.mapping_action("key.sneak", !sneaking)
+        }
+    }
+
+    /// A tap on the view clicks as Bedrock's does: an attack on a living entity under the
+    /// crosshair (`crosshairPickEntity`), a use on anything else.
+    fn touch_tap(&mut self) -> Result<()> {
+        let mapping = if self.crosshair_living().is_some() {
+            "key.attack"
+        } else {
+            "key.use"
+        };
+        self.mapping_action(mapping, true)?;
+        self.mapping_action(mapping, false)
+    }
+
     pub(super) fn draw_touch(&self, batch: &mut HudBatch) {
         if let Some(layout) = self.touch_layout() {
             let mut ui = horizon_client::ui_theme::Ui::new(&self.gui.atlas, batch, self.cursor);
-            self.touch.draw(&mut ui, &layout);
+            self.touch
+                .draw(&mut ui, &layout, self.toggles.is_down(SNEAK));
             ui.finish();
         }
     }
@@ -141,8 +187,11 @@ impl Game<'_> {
             "start" => TouchPhase::Started,
             "move" => TouchPhase::Moved,
             "end" => TouchPhase::Ended,
+            "cancel" => TouchPhase::Cancelled,
             other => {
-                return Err(format!("touch phase must be start, move or end, not {other}").into());
+                return Err(
+                    format!("touch phase must be start, move, end or cancel, not {other}").into(),
+                );
             }
         };
         let id = self.window.as_ref().ok_or("no window yet")?.id();

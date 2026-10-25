@@ -35,7 +35,7 @@ version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/crates/horizon-client/Cargo
 app=$out/$kind/Horizon.app
 rm -rf "$app"
 mkdir -p "$app"
-cp "$root/target/$target/fast/horizon-client" "$app/"
+cp "${CARGO_TARGET_DIR:-$root/target}/$target/fast/horizon-client" "$app/"
 sed -e "s/@BUNDLE_ID@/$bundle_id/" -e "s/@VERSION@/$version/g" -e "s/@PLATFORM@/$platform/" \
   -e "s/@MINIMUM_OS@/$minimum_os/" "$here/Info.plist" > "$app/Info.plist"
 
