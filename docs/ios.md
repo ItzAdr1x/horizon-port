@@ -50,8 +50,21 @@ a touch, so the touch controls work with the mouse.
 
 ### 3. Play on your iPhone or iPad
 
-Not yet tried on a physical device: these are the standard signing steps for an app built outside
-Xcode.
+Not yet tried on a physical device. There are two ways in.
+
+**Sideload the .ipa** (no Xcode account needed on the Mac):
+
+```sh
+packaging/ios/package.sh device .local/horizon-client/26.3 .local/ios
+```
+
+Without `IOS_PROFILE` this makes `.local/ios/device/Horizon.ipa`, signed ad hoc. Install it with a
+sideloading tool such as [Sideloadly](https://sideloadly.io) or [AltStore](https://altstore.io),
+which signs it again with your Apple ID. With a free Apple ID the app stops opening after 7 days
+until you install it again; if the tool says the bundle id is taken, let it change it. The .ipa
+holds files made from your Minecraft: don't share or upload it.
+
+**Or sign it yourself** with Xcode's signing:
 
 1. Sign in to Xcode with your Apple account (Xcode > Settings > Accounts). A free account works,
    but its apps stop opening after 7 days until you install them again.

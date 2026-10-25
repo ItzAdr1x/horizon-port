@@ -8,8 +8,10 @@
 # `horizon-resources` beside its binary (Options::read in game.rs). It is made from the player's
 # own copy of Minecraft, so the app is for the player's own devices: keep OUTDIR under .local/.
 #
-# device: signed with IOS_SIGN_IDENTITY ("Apple Development: …") and the provisioning profile
-# IOS_PROFILE, which must cover IOS_BUNDLE_ID (default dev.horizon.ios) and the device.
+# device: Horizon.app and Horizon.ipa, signed with IOS_SIGN_IDENTITY ("Apple Development: …") and
+# the provisioning profile IOS_PROFILE, which must cover IOS_BUNDLE_ID (default dev.horizon.ios) and
+# the device. Without IOS_PROFILE they are signed ad hoc, for a sideloading tool (Sideloadly,
+# AltStore) to sign again with the player's Apple ID as it installs the .ipa.
 # simulator: signed ad hoc.
 # Needs Xcode and `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`.
 set -euo pipefail
@@ -58,7 +60,7 @@ plutil -lint "$app/Info.plist"
 # Cloned, not copied, on APFS: the resources take no space twice.
 cp -Rc "$resources" "$app/horizon-resources"
 
-if [[ "$kind" == device ]]; then
+if [[ "$kind" == device && -n "${IOS_PROFILE:-}" ]]; then
   cp "$IOS_PROFILE" "$app/embedded.mobileprovision"
   security cms -D -i "$IOS_PROFILE" > "$work/profile.plist"
   /usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$work/profile.plist" > "$work/entitlements.plist"
@@ -71,3 +73,12 @@ else
 fi
 codesign --verify --strict --verbose=2 "$app"
 echo "Packaged $app"
+if [[ "$kind" == device ]]; then
+  # An .ipa is the app in a Payload folder, zipped.
+  ipa=$out/device/Horizon.ipa
+  rm -f "$ipa"
+  mkdir "$work/Payload"
+  cp -Rc "$app" "$work/Payload/"
+  (cd "$work" && zip -qry "$ipa" Payload)
+  echo "Packaged $ipa"
+fi
