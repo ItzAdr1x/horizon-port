@@ -10,6 +10,7 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 - [Host a server](hosting.md): install `horizon-server`, prepare the game files, first run, `server.toml`, the commands, the web panel, backups, services and Docker; what works today and what doesn't yet.
 - [Hosting a server: design](server.md): `horizon-server`, the design and the plan: install, `server.toml`, the CLI, the web panel, backups, services, Docker, and the bot benchmark against vanilla.
 - [Agent control](agent-control.md): what AI agents can drive in the launcher and the game, and the design of the control socket, `horizon-ctl` and MCP.
+- [iPhone and iPad](ios.md): building and installing the app yourself, the touch controls, what differs on iOS.
 - [Graphics](graphics.md): the Simple and Advanced graphics settings, the graphics benchmark and what it measured.
 - [Benchmark](benchmark.md): Horizon against vanilla 26.3 and vanilla with performance mods, on the same machine, world, path and settings: what is measured, how it is kept fair, how to reproduce it.
 - [Extras](extras.md): optional zoom, minimap, FPS and keystroke overlays and auto-reconnect, all off by default.
