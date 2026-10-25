@@ -1,38 +1,109 @@
 # Horizon on iPhone and iPad
 
-The game builds for iOS and the iOS simulator, draws with Metal and plays with touch controls.
-There is no App Store build: the app carries resources prepared from your own copy of Minecraft,
-so you build it yourself and install it on your own devices.
+The game builds for iOS and the iOS simulator, draws with Metal, plays with Pocket Edition's
+touch controls and runs Horizon mods.
 
 ## Build and install
 
-You need a Mac with Xcode 27 or later, the Rust targets
-(`rustup target add aarch64-apple-ios aarch64-apple-ios-sim`) and prepared resources:
-[Build from source](../README.md#build-from-source), then `horizon-prepare sounds` for sound.
+There is no App Store build: the app carries game files made from your own copy of Minecraft, so
+you build it on a Mac and install it on your own devices. Keep the app and its `.local/` folder to
+yourself.
+
+### What you need
+
+- A Mac with **Xcode 27** or later. Open it once to accept its license and install the iOS
+  platform (Xcode > Settings > Components).
+- **Rust** through [rustup](https://rustup.rs), 1.90 or newer, with the iOS targets:
+  `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`.
+- A **Java 25 JDK**, to prepare the game files once: `brew install openjdk@25`, then
+  `export JAVA_HOME="$(brew --prefix openjdk@25)" PATH="$(brew --prefix openjdk@25)/bin:$PATH"`.
+- **Minecraft: Java Edition 26.3**, installed with the official launcher and played once, and its
+  server jar: the `downloads.server.url` in the launcher's `versions/26.3/26.3.json`, or
+  [minecraft.net/download/server](https://www.minecraft.net/en-us/download/server) while 26.3 is the
+  current release.
+
+### 1. Prepare the game files (once)
 
 ```sh
-# The simulator: signed ad hoc.
-packaging/ios/package.sh simulator .local/horizon-client/26.3 .local/ios
-xcrun simctl install booted .local/ios/simulator/Horizon.app
-xcrun simctl launch booted dev.horizon.ios
-
-# A device (not yet tried: written from the signing steps for any iOS app): an Apple
-# Development certificate and a provisioning profile that covers the bundle id and the device
-# (Xcode makes one when it signs any app for that device).
-IOS_SIGN_IDENTITY="Apple Development: …" IOS_PROFILE=~/path/to/profile.mobileprovision \
-IOS_BUNDLE_ID=com.example.horizon packaging/ios/package.sh device .local/horizon-client/26.3 .local/ios
-xcrun devicectl device install app --device UDID .local/ios/device/Horizon.app
+git clone https://github.com/woke/horizon-duo.git
+cd horizon-duo
+cargo run --release -p horizon-prepare -- --prepare --server-jar ~/Downloads/server.jar
+cargo run --release -p horizon-prepare -- sounds   # optional: the game is silent without it
 ```
 
-`package.sh` builds `horizon-client` with the `fast` profile and without the `controllers` feature
-(gilrs and hidapi have no iOS backend), and puts the resources in the app as `horizon-resources`.
+They land in `.local/horizon-client/26.3`, about 700 MB with the sounds. If your launcher keeps
+the game somewhere other than `~/Library/Application Support/minecraft`, add `--minecraft-dir PATH`.
+
+### 2. Play in the simulator
+
+```sh
+packaging/ios/package.sh simulator .local/horizon-client/26.3 .local/ios
+xcrun simctl list devices available          # pick an iPhone or iPad
+xcrun simctl boot "iPhone 17 Pro"            # skip if one is already booted
+open -a Simulator
+xcrun simctl install booted .local/ios/simulator/Horizon.app
+xcrun simctl launch booted dev.horizon.ios
+```
+
+The first build takes a few minutes; later ones rebuild what changed. In the Simulator a click is
+a touch, so the touch controls work with the mouse.
+
+### 3. Play on your iPhone or iPad
+
+Not yet tried on a physical device: these are the standard signing steps for an app built outside
+Xcode.
+
+1. Sign in to Xcode with your Apple account (Xcode > Settings > Accounts). A free account works,
+   but its apps stop opening after 7 days until you install them again.
+2. On the device, turn on Developer Mode (Settings > Privacy & Security > Developer Mode), and
+   connect it to the Mac once by cable.
+3. Get a provisioning profile for your device and a bundle id of your own: in Xcode, make a new iOS
+   App project with that bundle id (say `com.yourname.horizon`), pick your team under Signing &
+   Capabilities, and run it on the device once. Xcode registers the device and saves the profile in
+   `~/Library/Developer/Xcode/UserData/Provisioning Profiles`.
+4. Build, sign and install Horizon with that profile:
+
+   ```sh
+   security find-identity -v -p codesigning   # your "Apple Development: …" identity
+   xcrun devicectl list devices               # your device's identifier
+   IOS_SIGN_IDENTITY="Apple Development: Your Name (ABCDE12345)" \
+   IOS_PROFILE="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/<profile>.mobileprovision" \
+   IOS_BUNDLE_ID=com.yourname.horizon \
+   packaging/ios/package.sh device .local/horizon-client/26.3 .local/ios
+   xcrun devicectl device install app --device <identifier> .local/ios/device/Horizon.app
+   ```
+
+5. With a free account, the first launch asks you to trust the developer: Settings > General >
+   VPN & Device Management.
+
+### Mods
+
+Mods are the same `.hmod` files as on desktops ([mods.md](mods.md)). In the Files app, put them in
+On My iPhone > Horizon > horizon > `horizon-mods`, restart Horizon, and turn them on in Options >
+Mods. iOS lets no app run code it generates, so code mods run on wasmtime's Pulley interpreter:
+they work, more slowly than on a desktop.
+
+### Troubleshooting
+
+- **`can't find crate for core` (or `std`)**: `cargo` isn't rustup's (Homebrew's `rust` has no iOS
+  targets). Put rustup's first: `export PATH="$(dirname "$(rustup which cargo)"):$PATH"`.
+- **`Unable to locate a Java Runtime`** from `horizon-prepare`: `JAVA_HOME` isn't a Java 25 JDK
+  (see What you need).
+- **The game stops at "Prepare resources"**: step 1 didn't finish, or `package.sh` was given
+  another folder than `.local/horizon-client/26.3`.
+
+### How the app is put together
+
+`package.sh` builds `horizon-client` with the `fast` profile and the `mods` feature, without
+`controllers` (gilrs and hidapi have no iOS backend), and puts the resources in the app as
+`horizon-resources`.
 The game folder (saves, screenshots, `options.txt`, logs) is `Documents/horizon` in the app's
 container, which the Files app shows under On My iPhone. Arguments after the bundle id in
 `simctl launch` reach the game: `--control --control-socket ctl.sock` puts the control socket in
 that folder. Its full path is longer than a Unix socket path may be, so on the Mac `cd` into the
 folder (`xcrun simctl get_app_container booted BUNDLE_ID data`, then `Documents/horizon`) and run
-`horizon-ctl --socket ctl.sock`. The world is saved when the app
-goes to the background, where iOS may end it without warning.
+`horizon-ctl --socket ctl.sock`. The world is saved when the app goes to the background, where
+iOS may end it without warning.
 
 ## Touch controls
 
@@ -66,7 +137,7 @@ platform, so the controls can be tested on a Mac.
 - Text copied in the game stays in the game: Horizon does not reach the system clipboard there.
 - The iOS simulator's Metal has no indirect draws, so the world draws one section at a time there;
   iPhones and iPads have them.
+- Code mods run on wasmtime's Pulley interpreter instead of cranelift's native code.
 - Not wired up yet: typing (chat, signs, world names: there is no on-screen keyboard for touch),
-  scrolling lists by dragging them (their scroll bars work), game controllers, and code mods (the
-  `mods` feature is not built for iOS). Multiplayer, LAN and Play with Friends have not been tried
-  on iOS, and neither has a physical device.
+  scrolling lists by dragging them (their scroll bars work) and game controllers. Multiplayer, LAN
+  and Play with Friends have not been tried on iOS, and neither has a physical device.

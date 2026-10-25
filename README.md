@@ -26,6 +26,31 @@ Horizon is Minecraft: Java Edition 26.3 rewritten in Rust: a native game that re
 
 > Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft. Horizon contains no Minecraft code, assets or data: you need your own legally obtained copy of Minecraft: Java Edition 26.3.
 
+## Horizon Duo: iPhone and iPad
+
+This fork, **horizon-duo**, runs Horizon on iPhone and iPad: Metal rendering, Pocket Edition's
+touch controls (a D-pad, Jump, hold to mine, double tap to sprint and fly) and Horizon mods. There
+is no App Store build: you build it on a Mac from your own copy of Minecraft and install it on your
+own devices.
+
+You need Xcode 27, Rust through rustup, a Java 25 JDK and Minecraft: Java Edition 26.3 played once
+in the official launcher, plus its server jar. Then, in the simulator:
+
+```sh
+git clone https://github.com/woke/horizon-duo.git
+cd horizon-duo
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+cargo run --release -p horizon-prepare -- --prepare --server-jar ~/Downloads/server.jar
+cargo run --release -p horizon-prepare -- sounds
+packaging/ios/package.sh simulator .local/horizon-client/26.3 .local/ios
+xcrun simctl boot "iPhone 17 Pro"; open -a Simulator   # any iPhone or iPad simulator
+xcrun simctl install booted .local/ios/simulator/Horizon.app
+xcrun simctl launch booted dev.horizon.ios
+```
+
+Installing on a real iPhone or iPad, mods, the controls and troubleshooting:
+**[docs/ios.md](docs/ios.md)**.
+
 ## Download
 
 Horizon is installed through **the Horizon launcher**. Get it from [playhorizon.dev](https://playhorizon.dev) (the Download button picks your system) or from [the launcher releases](https://github.com/ludovic111/horizon/releases?q=launcher-v&expanded=true), for Linux x86-64, macOS on Apple Silicon or Windows x64. The launcher installs and updates the game, prepares its files from your own copy of Minecraft, and updates itself.
