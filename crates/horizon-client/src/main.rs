@@ -15,6 +15,11 @@ fn main() {
     } else {
         (logging::game_home(), "client", "Render thread")
     };
+    // The launcher starts the game in its folder; iOS starts every app in `/`.
+    #[cfg(target_os = "ios")]
+    if let Err(e) = std::fs::create_dir_all(&home).and_then(|()| std::env::set_current_dir(&home)) {
+        eprintln!("Horizon: {}: {e}", home.display());
+    }
     if !help {
         logging::init(&home, thread);
         crash::install(home.clone(), side);

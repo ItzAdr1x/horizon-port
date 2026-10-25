@@ -306,10 +306,16 @@ impl Options {
         })
     }
     fn read() -> Result<Option<Self>> {
+        // codesign takes an iOS app's `resources` for a macOS bundle's Resources and refuses it.
+        let bundled = if cfg!(target_os = "ios") {
+            "horizon-resources"
+        } else {
+            "resources"
+        };
         let sibling = std::env::current_exe()?
             .parent()
             .ok_or("missing executable directory")?
-            .join("resources");
+            .join(bundled);
         let mut o = Self {
             resources: if sibling.join("horizon-resources.json").exists() {
                 sibling

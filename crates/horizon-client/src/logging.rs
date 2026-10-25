@@ -33,6 +33,11 @@ pub fn data_dir() -> PathBuf {
         if let Some(d) = env("APPDATA") {
             return d;
         }
+    } else if cfg!(target_os = "ios") {
+        // The app's Documents, which the Files app shows (UIFileSharingEnabled).
+        if let Some(h) = &home {
+            return h.join("Documents");
+        }
     } else if cfg!(target_os = "macos") {
         if let Some(h) = &home {
             return h.join("Library/Application Support");
