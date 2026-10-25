@@ -21,6 +21,11 @@ wit-parser = { version = "0.239", optional = true }
 sha2 = { version = "0.10", optional = true }
 minisign-verify = { version = "0.3", optional = true }
 
+# iOS lets no app write code it runs: there, cranelift compiles mods to Pulley's bytecode, which
+# wasmtime interprets (runtime.rs).
+[target.'cfg(target_os = "ios")'.dependencies]
+wasmtime = { version = "36.0.18", default-features = false, features = ["pulley"], optional = true }
+
 [features]
 # Loads and runs mods (the game's `mods` feature); without it only manifests,
 # content and packaging. Off by default so builds that don't run mods (the

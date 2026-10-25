@@ -27,9 +27,10 @@ resources=$(cd "$2" && pwd)
 out=$(mkdir -p "$3" && cd "$3" && pwd)
 [[ -f "$resources/horizon-resources.json" ]] || { echo "$resources holds no prepared resources" >&2; exit 1; }
 
-# gilrs and hidapi have no iOS backend: no `controllers`.
+# gilrs and hidapi have no iOS backend: no `controllers`. Code mods run on wasmtime's Pulley
+# interpreter there (horizon-mods' runtime.rs).
 (cd "$root" && IPHONEOS_DEPLOYMENT_TARGET=$minimum_os cargo build --profile fast --target "$target" \
-  -p horizon-client --bin horizon-client --no-default-features --features audio)
+  -p horizon-client --bin horizon-client --no-default-features --features audio,mods)
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/crates/horizon-client/Cargo.toml" | head -1)
 
 app=$out/$kind/Horizon.app

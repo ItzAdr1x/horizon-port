@@ -180,6 +180,9 @@ impl Mods {
         if self.engine.is_none() {
             let mut config = Config::new();
             config.wasm_component_model(true).consume_fuel(true);
+            // iOS lets no app make memory it runs: Pulley's bytecode is interpreted instead.
+            #[cfg(target_os = "ios")]
+            config.target("pulley64").map_err(|e| e.to_string())?;
             let engine = Engine::new(&config).map_err(|e| e.to_string())?;
             let mut linker = Linker::new(&engine);
             HorizonMod::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
