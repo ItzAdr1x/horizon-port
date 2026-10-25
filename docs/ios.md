@@ -36,22 +36,28 @@ goes to the background, where iOS may end it without warning.
 
 ## Touch controls
 
-They are on in the iOS build only, and drawn once a finger first touches the screen.
+Pocket Edition's controls, drawn in its pixel style. They are on in the iOS build only, and drawn
+once a finger first touches the screen.
 
 | Where | What it does |
 | --- | --- |
 | Title screen and menus | A finger is the mouse pointer: tap a button, drag a slider |
 | Back (top left, in a world's menus) | Escape: closes the inventory and other screens, resumes from pause |
-| Left 40 % of the screen | A joystick appears where the thumb lands; pushed all the way forward it sprints |
-| Anywhere else | Drag to turn the view; tap to attack the mob under the crosshair, or else use the held item (place a block, open a door or chest); hold still 0.3 s to attack and mine until the finger lifts |
+| D-pad (bottom left) | Forward, back and the sides; the forward diagonals show while forward is held, and a thumb slides between arrows. A double tap on forward sprints. The middle toggles sneaking, and goes down while flying |
+| Jump (bottom right) | Jumps; a double tap flies in creative, and holding it goes up while flying |
+| Anywhere else | Drag to turn the view. Tap to attack the mob under the crosshair, or else use the held item (place a block, open a door or chest). Hold still: a ring fills, then the finger mines until it lifts, or eats, drinks, draws a bow or blocks when the held item is used over time |
 | Hotbar | Tap or slide to select a slot |
-| Jump, Use, Sneak | Hold to jump or keep using (eat, draw a bow, block); Sneak toggles, honouring Controls' Sneak: Toggle as the pad does |
 | ••• beside the hotbar | The inventory |
 | II (top right) | Pause |
 
+Options > Horizon Settings > Controller Settings > **Touch Movement** swaps the D-pad for a
+joystick that appears where the left thumb lands and sprints pushed all the way forward. Controls'
+Sneak: Toggle and Sprint: Toggle work as with a keyboard.
+
 The system's edge swipes (home, Control Center) are asked to wait for a second swipe while the
-game is open, so the controls along the edges keep it (not yet tried on a device). `horizon-ctl touch start|move|end|cancel ID X Y` sends a finger
-as the screen would, on every platform, so the controls can be tested on a Mac.
+game is open, so the controls along the edges keep it (not yet tried on a device).
+`horizon-ctl touch start|move|end|cancel ID X Y` sends a finger as the screen would, on every
+platform, so the controls can be tested on a Mac.
 
 ## What is different on iOS
 

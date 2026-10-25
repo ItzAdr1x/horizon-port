@@ -402,6 +402,8 @@ pub struct PadSettings {
     /// How the pad drives menus: a focus highlight or a virtual pointer.
     pub menu_nav: MenuNav,
     pub keyboard: TextKeyboard,
+    /// What moves the player on a touch screen (iOS).
+    pub touch_movement: crate::touch::Movement,
     /// Action name -> button, `None` for unbound; missing means the default.
     bindings: BTreeMap<&'static str, Option<Button>>,
 }
@@ -422,6 +424,7 @@ impl Default for PadSettings {
             glyphs: GlyphStyle::Auto,
             menu_nav: MenuNav::Focus,
             keyboard: TextKeyboard::Auto,
+            touch_movement: crate::touch::Movement::DPad,
             bindings: BTreeMap::new(),
         }
     }
@@ -479,6 +482,7 @@ impl PadSettings {
                 "glyphs" => s.glyphs = GlyphStyle::parse(value),
                 "menuNavigation" => s.menu_nav = MenuNav::parse(value),
                 "keyboard" => s.keyboard = TextKeyboard::parse(value),
+                "touchMovement" => s.touch_movement = crate::touch::Movement::parse(value),
                 other => {
                     if let Some(action) = other.strip_prefix("bind_") {
                         let button = if value == "none" {
@@ -497,7 +501,7 @@ impl PadSettings {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "enabled:{}\nvibration:{}\nadaptiveTriggers:{}\nlightbar:{}\nlookSensitivity:{}\ninvertX:{}\ninvertY:{}\nmoveDeadzone:{}\nlookDeadzone:{}\ntriggerThreshold:{}\ntoggleSneak:{}\nglyphs:{}\nmenuNavigation:{}\nkeyboard:{}\n",
+            "enabled:{}\nvibration:{}\nadaptiveTriggers:{}\nlightbar:{}\nlookSensitivity:{}\ninvertX:{}\ninvertY:{}\nmoveDeadzone:{}\nlookDeadzone:{}\ntriggerThreshold:{}\ntoggleSneak:{}\nglyphs:{}\nmenuNavigation:{}\nkeyboard:{}\ntouchMovement:{}\n",
             bool_text(self.enabled),
             bool_text(self.vibration),
             bool_text(self.adaptive_triggers),
@@ -512,6 +516,7 @@ impl PadSettings {
             self.glyphs.name(),
             self.menu_nav.name(),
             self.keyboard.name(),
+            self.touch_movement.name(),
         );
         for (action, button) in &self.bindings {
             text.push_str(&format!(

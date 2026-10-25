@@ -4111,7 +4111,7 @@ impl Game<'_> {
         self.tick_command_extras();
         self.tick_mods();
         let camera_eye = self.camera_eye_height();
-        let stick = self.pad_move().or(self.touch.stick());
+        let stick = self.pad_move().or(self.touch.move_vector());
         if self.riding.is_some() && self.player.is_some() {
             let playing = self.screen == Screen::Playing;
             let held = |k| playing && self.keys.contains(&k);

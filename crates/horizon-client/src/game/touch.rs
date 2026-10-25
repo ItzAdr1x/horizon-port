@@ -5,7 +5,7 @@ use horizon_client::{
     Result,
     hud::HudBatch,
     keymapping::{SNEAK, SPRINT},
-    touch::{Input, Layout, Mode, Phase},
+    touch::{Context, Input, Layout, Mode, Phase},
 };
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -56,7 +56,26 @@ fn pointer_events(
 impl Game<'_> {
     fn touch_layout(&self) -> Option<Layout> {
         let r = self.renderer.as_ref()?;
-        Some(Layout::new(r.config.width, r.config.height))
+        let scale = self.window.as_ref()?.scale_factor();
+        Some(Layout::new(r.config.width, r.config.height, scale))
+    }
+
+    /// The held item is used over time, as food, potions, bows and shields are
+    /// (`Item.getUseDuration`): a held finger uses it rather than mining.
+    fn held_item_used_over_time(&self) -> bool {
+        let Some(stack) = self.held() else {
+            return false;
+        };
+        let components = self
+            .pack
+            .item_renderer
+            .models
+            .components(&horizon_client::item_render::stack_view(stack));
+        super::item_draw::use_duration(&components) > 0
+            || components
+                .get("minecraft:item_model")
+                .and_then(Value::as_str)
+                == Some("minecraft:shield")
     }
 
     pub(super) fn touch_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, touch: Touch) {
@@ -87,7 +106,13 @@ impl Game<'_> {
         if self.touch.active() {
             self.last_input = Instant::now();
         }
-        let inputs = self.touch.frame(mode, Instant::now());
+        let context = Context {
+            mode,
+            movement: self.settings.controller.touch_movement,
+            flying: self.player.as_ref().is_some_and(|p| p.flying),
+            held_item_used_over_time: self.held_item_used_over_time(),
+        };
+        let inputs = self.touch.frame(context, Instant::now());
         self.apply_touch(event_loop, id, DeviceId::dummy(), inputs);
     }
 
@@ -176,10 +201,9 @@ impl Game<'_> {
 
     pub(super) fn draw_touch(&self, batch: &mut HudBatch) {
         if let Some(layout) = self.touch_layout() {
-            let mut ui = horizon_client::ui_theme::Ui::new(&self.gui.atlas, batch, self.cursor);
+            let sneaking = self.toggles.is_down(SNEAK);
             self.touch
-                .draw(&mut ui, &layout, self.toggles.is_down(SNEAK));
-            ui.finish();
+                .draw(batch, &self.gui.atlas, &layout, sneaking, Instant::now());
         }
     }
 
@@ -221,10 +245,10 @@ impl Game<'_> {
 impl Loading {
     /// The title screen while the game loads: a finger is the pointer.
     pub(super) fn touch_event(&mut self, event_loop: &ActiveEventLoop, touch: Touch) -> Result<()> {
-        let Some(r) = &self.renderer else {
+        let (Some(r), Some(window)) = (&self.renderer, &self.window) else {
             return Ok(());
         };
-        let layout = Layout::new(r.config.width, r.config.height);
+        let layout = Layout::new(r.config.width, r.config.height, window.scale_factor());
         let at = [touch.location.x, touch.location.y];
         let inputs = self
             .touch

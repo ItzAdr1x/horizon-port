@@ -100,6 +100,7 @@ pub enum Opt {
     PadGlyphs,
     PadMenuNav,
     PadKeyboard,
+    TouchMovement,
 }
 fn tr(key: &str) -> Text {
     Text::translate(key, &[])
@@ -281,6 +282,7 @@ impl Opt {
             Opt::PadGlyphs => "Button Glyphs",
             Opt::PadMenuNav => "Menu Navigation",
             Opt::PadKeyboard => "On-Screen Keyboard",
+            Opt::TouchMovement => "Touch Movement",
         }
     }
     pub(crate) fn kind(self, s: &Settings) -> Kind {
@@ -609,6 +611,10 @@ impl Opt {
                 gamepad::TextKeyboard::Horizon => "Horizon",
                 gamepad::TextKeyboard::Steam => "Steam",
             }),
+            Opt::TouchMovement => Text::literal(match s.controller.touch_movement {
+                crate::touch::Movement::DPad => "D-Pad",
+                crate::touch::Movement::Joystick => "Joystick",
+            }),
             _ => Text::empty(),
         }
     }
@@ -784,6 +790,12 @@ impl Opt {
                     .position(|k| *k == s.controller.keyboard)
                     .unwrap_or(0) as u8;
                 s.controller.keyboard = all[usize::from(next(i, 3))];
+            }
+            Opt::TouchMovement => {
+                s.controller.touch_movement = match s.controller.touch_movement {
+                    crate::touch::Movement::DPad => crate::touch::Movement::Joystick,
+                    crate::touch::Movement::Joystick => crate::touch::Movement::DPad,
+                }
             }
             _ => {}
         }
@@ -1444,6 +1456,10 @@ impl OptionsUi {
                     Opt::PadMenuNav,
                     Opt::PadKeyboard,
                 ]));
+                // Touch screens are iOS's alone.
+                if cfg!(target_os = "ios") {
+                    rows.extend(pairs(&[Opt::TouchMovement]));
+                }
                 rows
             }
             Page::Mouse => pairs(&[

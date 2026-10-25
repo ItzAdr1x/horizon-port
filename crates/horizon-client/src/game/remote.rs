@@ -3208,7 +3208,7 @@ impl Game<'_> {
             }
             self.capture_loaded_world();
         }
-        let stick = self.pad_move().or(self.touch.stick());
+        let stick = self.pad_move().or(self.touch.move_vector());
         if self.player.is_none() {
             return Ok(());
         }
