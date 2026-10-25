@@ -163,6 +163,12 @@ impl ToggleKeys {
             }
         }
     }
+    /// A mapping set down or up outright, as touch controls want a state rather than a key's
+    /// edges (which a screen holds back): no click, and nothing restored when a screen closes.
+    pub fn set(&mut self, slot: usize, down: bool) {
+        self.0[slot].is_down = down;
+        self.0[slot].released_by_screen_when_down = false;
+    }
     /// `LocalPlayer.respawn`: `KeyMapping.resetToggleKeys`.
     pub fn respawn(&mut self) {
         for key in &mut self.0 {

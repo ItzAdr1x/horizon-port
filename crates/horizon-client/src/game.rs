@@ -10738,14 +10738,13 @@ impl ApplicationHandler for Game<'_> {
             attributes, "horizon", "horizon",
         );
         // iOS: the system's edge swipes (home, Control Center) wait for a second swipe, so the
-        // touch controls along the edges keep the game, and the home indicator hides.
+        // touch controls along the edges keep the game. The home indicator stays: hidden, it
+        // would let the first swipe through.
         #[cfg(target_os = "ios")]
-        let attributes = {
-            use winit::platform::ios::{ScreenEdge, WindowAttributesExtIOS};
-            attributes
-                .with_preferred_screen_edges_deferring_system_gestures(ScreenEdge::ALL)
-                .with_prefers_home_indicator_hidden(true)
-        };
+        let attributes = winit::platform::ios::WindowAttributesExtIOS::with_preferred_screen_edges_deferring_system_gestures(
+            attributes,
+            winit::platform::ios::ScreenEdge::ALL,
+        );
         let window = match event_loop.create_window(
             attributes
                 .with_inner_size(winit::dpi::LogicalSize::new(size[0], size[1]))
@@ -10905,7 +10904,10 @@ impl ApplicationHandler for Game<'_> {
                     self.observe_fullscreen();
                 }
                 WindowEvent::Occluded(true) if cfg!(target_os = "ios") => {
-                    self.save_for_background()?;
+                    // The game goes on: an error here must not end it.
+                    if let Err(e) = self.save_for_background() {
+                        log::warn!("Horizon: saving as the app went to the background: {e}");
+                    }
                 }
                 WindowEvent::Focused(focused) => {
                     self.focused = focused;
@@ -12947,14 +12949,13 @@ impl Loading {
             attributes, "horizon", "horizon",
         );
         // iOS: the system's edge swipes (home, Control Center) wait for a second swipe, so the
-        // touch controls along the edges keep the game, and the home indicator hides.
+        // touch controls along the edges keep the game. The home indicator stays: hidden, it
+        // would let the first swipe through.
         #[cfg(target_os = "ios")]
-        let attributes = {
-            use winit::platform::ios::{ScreenEdge, WindowAttributesExtIOS};
-            attributes
-                .with_preferred_screen_edges_deferring_system_gestures(ScreenEdge::ALL)
-                .with_prefers_home_indicator_hidden(true)
-        };
+        let attributes = winit::platform::ios::WindowAttributesExtIOS::with_preferred_screen_edges_deferring_system_gestures(
+            attributes,
+            winit::platform::ios::ScreenEdge::ALL,
+        );
         let window = match event_loop.create_window(
             attributes
                 .with_inner_size(winit::dpi::LogicalSize::new(size[0], size[1]))

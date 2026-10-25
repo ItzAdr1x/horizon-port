@@ -98,7 +98,14 @@ impl Game<'_> {
         device_id: DeviceId,
         inputs: Vec<Input>,
     ) {
+        // While a world opens or saves, only the pointer acts, through window_event's checks.
+        let busy = self.pending_save.is_some()
+            || self.world_loader.is_some()
+            || self.pending_entry.is_some();
         for input in inputs {
+            if busy && !matches!(input, Input::Pointer { .. }) {
+                continue;
+            }
             let result = match input {
                 Input::Pointer { at, pressed } => {
                     for event in pointer_events(device_id, at, pressed) {
@@ -128,16 +135,11 @@ impl Game<'_> {
         }
     }
 
-    /// Sprinting as the joystick wants it. Under Sprint: Toggle a press flips sprinting and a
-    /// release does nothing, so a press goes out only when the state must change.
+    /// Sprinting as the joystick wants it, set outright: under Sprint: Toggle a key's edges
+    /// would flip it, and behind a screen they don't reach it.
     fn touch_sprint(&mut self, on: bool) -> Result<()> {
-        if !self.settings.toggle_sprint {
-            return self.mapping_action("key.sprint", on);
-        }
-        if self.toggles.is_down(SPRINT) != on {
-            self.mapping_action("key.sprint", true)?;
-            self.mapping_action("key.sprint", false)?;
-        }
+        self.toggles.set(SPRINT, on);
+        self.sync_toggle(SPRINT);
         Ok(())
     }
 

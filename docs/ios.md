@@ -29,7 +29,9 @@ xcrun devicectl device install app --device UDID .local/ios/device/Horizon.app
 The game folder (saves, screenshots, `options.txt`, logs) is `Documents/horizon` in the app's
 container, which the Files app shows under On My iPhone. Arguments after the bundle id in
 `simctl launch` reach the game: `--control --control-socket ctl.sock` puts the control socket in
-that folder, where `horizon-ctl --socket` on the Mac reaches it. The world is saved when the app
+that folder. Its full path is longer than a Unix socket path may be, so on the Mac `cd` into the
+folder (`xcrun simctl get_app_container booted BUNDLE_ID data`, then `Documents/horizon`) and run
+`horizon-ctl --socket ctl.sock`. The world is saved when the app
 goes to the background, where iOS may end it without warning.
 
 ## Touch controls
@@ -47,8 +49,8 @@ They are on in the iOS build only, and drawn once a finger first touches the scr
 | ••• beside the hotbar | The inventory |
 | II (top right) | Pause |
 
-The system's edge swipes (home, Control Center) need a second swipe while the game is open, so the
-controls along the edges keep it. `horizon-ctl touch start|move|end|cancel ID X Y` sends a finger
+The system's edge swipes (home, Control Center) are asked to wait for a second swipe while the
+game is open, so the controls along the edges keep it (not yet tried on a device). `horizon-ctl touch start|move|end|cancel ID X Y` sends a finger
 as the screen would, on every platform, so the controls can be tested on a Mac.
 
 ## What is different on iOS

@@ -16,9 +16,10 @@ use crate::ui_theme::{self, Face, Ui, color};
 
 /// A finger held still on the view this long attacks.
 const HOLD: Duration = Duration::from_millis(300);
-/// A button stays down at least this long: the game samples held keys once a tick (50 ms), so a
-/// quicker tap could fall between two ticks and do nothing.
-const MIN_PRESS: Duration = Duration::from_millis(100);
+/// A key mapping the controls hold stays down, and then up, at least this long: the game samples
+/// held keys once a tick (50 ms) in a frame, so a quicker tap, or the gap between the two taps
+/// of a quick double tap (flying), could fall between two ticks.
+const MIN_STATE: Duration = Duration::from_millis(70);
 /// How far (dp) a finger on the view may drift and still tap or hold.
 const SLOP: f32 = 12.0;
 /// The joystick's reach (dp): a finger this far from where it landed tilts it all the way.
@@ -139,10 +140,7 @@ enum Role {
         still: bool,
         attacking: bool,
     },
-    Button {
-        button: Button,
-        pressed: Instant,
-    },
+    Button(Button),
     Hotbar,
     /// A finger that does nothing until it lifts: a second one on a menu, or one the screen
     /// changed under.
@@ -153,7 +151,7 @@ impl Role {
     /// The key mapping this finger holds down.
     fn holds(&self) -> Option<&'static str> {
         match *self {
-            Role::Button { button, .. } => button.mapping(),
+            Role::Button(button) => button.mapping(),
             Role::Look {
                 attacking: true, ..
             } => Some("key.attack"),
@@ -250,6 +248,63 @@ impl Layout {
     }
 }
 
+/// The key mappings as the game has them, and the presses and releases still to send: each
+/// mapping changes at most once per `MIN_STATE`.
+#[derive(Default)]
+struct Keys {
+    /// Each mapping's latest edge, sent or queued: when, and down or up.
+    latest: Vec<(&'static str, Instant, bool)>,
+    /// Edges waiting their time, oldest first for each mapping.
+    queued: Vec<(Instant, &'static str, bool)>,
+}
+
+impl Keys {
+    /// Down at the game, or about to be.
+    fn down(&self, mapping: &str) -> bool {
+        self.latest.iter().any(|&(m, _, down)| m == mapping && down)
+    }
+    /// Press or release `mapping`: now, or `MIN_STATE` after its latest edge.
+    fn set(&mut self, mapping: &'static str, down: bool, now: Instant, out: &mut Vec<Input>) {
+        let latest = self.latest.iter().position(|(m, ..)| *m == mapping);
+        let at = match latest.map(|i| self.latest[i]) {
+            Some((_, _, state)) if state == down => return,
+            Some((_, when, _)) => (when + MIN_STATE).max(now),
+            None if !down => return,
+            None => now,
+        };
+        let waiting = self.queued.iter().any(|(_, m, _)| *m == mapping);
+        if at <= now && !waiting {
+            out.push(Input::Mapping(mapping, down));
+        } else {
+            self.queued.push((at, mapping, down));
+        }
+        match latest {
+            Some(i) => self.latest[i] = (mapping, at, down),
+            None => self.latest.push((mapping, at, down)),
+        }
+    }
+    /// The queued edges whose time has come.
+    fn due(&mut self, now: Instant, out: &mut Vec<Input>) {
+        self.queued.retain(|&(at, mapping, down)| {
+            let due = at <= now;
+            if due {
+                out.push(Input::Mapping(mapping, down));
+            }
+            !due
+        });
+    }
+    /// A screen opened: what is down goes up at once, and nothing queued is sent.
+    fn release_all(&mut self, now: Instant, out: &mut Vec<Input>) {
+        self.queued.clear();
+        for &mut (mapping, ref mut when, ref mut down) in &mut self.latest {
+            if std::mem::take(down) {
+                out.push(Input::Mapping(mapping, false));
+                *when = now;
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Touch {
     fingers: Vec<Finger>,
@@ -257,8 +312,7 @@ pub struct Touch {
     /// The joystick: x right, y forward, each -1..1.
     stick: [f32; 2],
     sprinting: bool,
-    /// Button releases held back until the press has lasted `MIN_PRESS`.
-    late: Vec<(Instant, &'static str)>,
+    keys: Keys,
     /// A finger has touched the screen: the controls are drawn from then on.
     seen: bool,
 }
@@ -322,56 +376,43 @@ impl Touch {
         out
     }
 
-    /// Once a frame: what the screen shows now, the releases held back, and the fingers held
-    /// long enough to attack.
+    /// Once a frame: what the screen shows now, the edges whose time has come, and the fingers
+    /// held long enough to attack.
     pub fn frame(&mut self, mode: Mode, now: Instant) -> Vec<Input> {
         let mut out = Vec::new();
         if mode != self.mode {
-            // What fingers held stops with the screen they held it on.
-            let roles: Vec<Role> = self
-                .fingers
-                .iter_mut()
-                .map(|f| std::mem::replace(&mut f.role, Role::Spent))
-                .collect();
-            for role in roles {
-                self.release(role, now, &mut out);
-            }
-            for (_, mapping) in self.late.drain(..) {
-                out.push(Input::Mapping(mapping, false));
-            }
             self.mode = mode;
+            // What fingers held stops with the screen they held it on.
+            for i in 0..self.fingers.len() {
+                let role = std::mem::replace(&mut self.fingers[i].role, Role::Spent);
+                match role {
+                    Role::Pointer { at } => Self::lift_pointer(at, &mut out),
+                    Role::Stick { .. } => self.let_go_of_stick(&mut out),
+                    _ => {}
+                }
+            }
+            self.keys.release_all(now, &mut out);
         }
-        let due: Vec<&'static str> = self
-            .late
-            .iter()
-            .filter(|(at, _)| *at <= now)
-            .map(|(_, mapping)| *mapping)
-            .collect();
-        self.late.retain(|(at, _)| *at > now);
-        out.extend(due.into_iter().map(|m| Input::Mapping(m, false)));
-        let mut attacking = self.held("key.attack");
+        self.keys.due(now, &mut out);
         for finger in &mut self.fingers {
             if let Role::Look {
                 landed,
                 still: true,
-                attacking: held @ false,
+                attacking: attacking @ false,
                 ..
             } = &mut finger.role
                 && now.duration_since(*landed) >= HOLD
             {
-                *held = true;
-                if !std::mem::replace(&mut attacking, true) {
-                    out.push(Input::Mapping("key.attack", true));
-                }
+                *attacking = true;
+                self.keys.set("key.attack", true, now, &mut out);
             }
         }
         out
     }
 
-    /// A finger holds `mapping` down, or a release of it waits.
-    fn held(&self, mapping: &str) -> bool {
+    /// A finger holds `mapping` down.
+    fn fingers_hold(&self, mapping: &str) -> bool {
         self.fingers.iter().any(|f| f.role.holds() == Some(mapping))
-            || self.late.iter().any(|(_, m)| *m == mapping)
     }
 
     fn land(&mut self, layout: &Layout, at: [f64; 2], now: Instant, out: &mut Vec<Input>) -> Role {
@@ -401,17 +442,9 @@ impl Touch {
                 _ => {}
             }
             if let Some(mapping) = button.mapping() {
-                // Pressed again before its held-back release: it simply stays down.
-                if let Some(i) = self.late.iter().position(|(_, m)| *m == mapping) {
-                    self.late.remove(i);
-                } else if !self.held(mapping) {
-                    out.push(Input::Mapping(mapping, true));
-                }
+                self.keys.set(mapping, true, now, out);
             }
-            return Role::Button {
-                button,
-                pressed: now,
-            };
+            return Role::Button(button);
         }
         if let Some(slot) = layout.hotbar_slot(at) {
             out.push(Input::Hotbar(slot));
@@ -467,7 +500,7 @@ impl Touch {
                 }
             }
             Role::Hotbar => out.extend(layout.hotbar_slot(at).map(Input::Hotbar)),
-            Role::Button { .. } | Role::Spent => {}
+            Role::Button(_) | Role::Spent => {}
         }
     }
 
@@ -475,13 +508,16 @@ impl Touch {
     fn lift(&mut self, role: Role, at: [f64; 2], now: Instant, out: &mut Vec<Input>) {
         match role {
             Role::Pointer { .. } => Self::lift_pointer(at, out),
-            // The Use button already uses.
+            // A tap clicks use or attack, which another finger may be holding down.
             Role::Look {
                 landed,
                 still: true,
                 attacking: false,
                 ..
-            } if now.duration_since(landed) < HOLD && !self.held("key.use") => {
+            } if now.duration_since(landed) < HOLD
+                && !self.keys.down("key.use")
+                && !self.keys.down("key.attack") =>
+            {
                 out.push(Input::Tap);
             }
             role => self.release(role, now, out),
@@ -499,31 +535,23 @@ impl Touch {
         });
     }
 
-    /// Let go of what a finger holds down, once no other finger holds it.
+    fn let_go_of_stick(&mut self, out: &mut Vec<Input>) {
+        self.stick = [0.0, 0.0];
+        if std::mem::take(&mut self.sprinting) {
+            out.push(Input::Sprint(false));
+        }
+    }
+
+    /// Let go of what a lifted finger held down, once no other finger holds it.
     fn release(&mut self, role: Role, now: Instant, out: &mut Vec<Input>) {
         match role {
             Role::Pointer { at } => Self::lift_pointer(at, out),
-            Role::Stick { .. } => {
-                self.stick = [0.0, 0.0];
-                if std::mem::take(&mut self.sprinting) {
-                    out.push(Input::Sprint(false));
+            Role::Stick { .. } => self.let_go_of_stick(out),
+            role => {
+                if let Some(mapping) = role.holds().filter(|m| !self.fingers_hold(m)) {
+                    self.keys.set(mapping, false, now, out);
                 }
             }
-            Role::Button { pressed, .. }
-            | Role::Look {
-                landed: pressed, ..
-            } => {
-                let Some(mapping) = role.holds().filter(|m| !self.held(m)) else {
-                    return;
-                };
-                let due = pressed + MIN_PRESS;
-                if matches!(role, Role::Button { .. }) && due > now && self.mode == Mode::Playing {
-                    self.late.push((due, mapping));
-                } else {
-                    out.push(Input::Mapping(mapping, false));
-                }
-            }
-            Role::Hotbar | Role::Spent => {}
         }
     }
 
@@ -573,7 +601,7 @@ impl Touch {
         let held = self
             .fingers
             .iter()
-            .any(|f| matches!(f.role, Role::Button { button: b, .. } if b == button));
+            .any(|f| matches!(f.role, Role::Button(b) if b == button));
         let (plate, ink) = if held || on {
             (color::ACCENT, color::ON_ACCENT)
         } else {
@@ -711,7 +739,7 @@ mod tests {
         touch.touch(&layout, 2, Phase::Start, VIEW, now);
         touch.frame(Mode::Playing, now + HOLD);
         assert_eq!(
-            touch.touch(&layout, 2, Phase::Cancel, VIEW, now + HOLD),
+            touch.touch(&layout, 2, Phase::Cancel, VIEW, now + HOLD + MIN_STATE),
             [Input::Mapping("key.attack", false)]
         );
     }
@@ -783,17 +811,17 @@ mod tests {
             touch.touch(&layout, 1, Phase::Start, jump, now),
             [Input::Mapping("key.jump", true)]
         );
-        // A quick tap: released once it has lasted MIN_PRESS.
+        // A quick tap: released once it has lasted MIN_STATE.
         assert!(touch.touch(&layout, 1, Phase::End, jump, now).is_empty());
-        assert!(touch.frame(Mode::Playing, now + MIN_PRESS / 2).is_empty());
+        assert!(touch.frame(Mode::Playing, now + MIN_STATE / 2).is_empty());
         assert_eq!(
-            touch.frame(Mode::Playing, now + MIN_PRESS),
+            touch.frame(Mode::Playing, now + MIN_STATE),
             [Input::Mapping("key.jump", false)]
         );
-        let later = now + MIN_PRESS * 2;
+        let later = now + MIN_STATE * 2;
         touch.touch(&layout, 2, Phase::Start, jump, later);
         assert_eq!(
-            touch.touch(&layout, 2, Phase::End, jump, later + MIN_PRESS),
+            touch.touch(&layout, 2, Phase::End, jump, later + MIN_STATE),
             [Input::Mapping("key.jump", false)]
         );
         let sneak = centre(&layout, Button::Sneak);
@@ -806,6 +834,41 @@ mod tests {
         assert_eq!(
             touch.touch(&layout, 4, Phase::Start, pause, now),
             [Input::Back]
+        );
+    }
+
+    #[test]
+    fn a_quick_double_tap_on_jump_presses_twice_with_a_tick_between() {
+        let (mut touch, layout, now) = playing();
+        let jump = centre(&layout, Button::Jump);
+        let ms = |n: u64| now + Duration::from_millis(n);
+        assert_eq!(
+            touch.touch(&layout, 1, Phase::Start, jump, now),
+            [Input::Mapping("key.jump", true)]
+        );
+        assert!(touch.touch(&layout, 1, Phase::End, jump, ms(40)).is_empty());
+        assert!(
+            touch
+                .touch(&layout, 2, Phase::Start, jump, ms(55))
+                .is_empty()
+        );
+        assert_eq!(
+            touch.frame(Mode::Playing, ms(70)),
+            [Input::Mapping("key.jump", false)]
+        );
+        assert!(touch.frame(Mode::Playing, ms(100)).is_empty());
+        assert_eq!(
+            touch.frame(Mode::Playing, ms(140)),
+            [Input::Mapping("key.jump", true)]
+        );
+        assert!(
+            touch
+                .touch(&layout, 2, Phase::End, jump, ms(150))
+                .is_empty()
+        );
+        assert_eq!(
+            touch.frame(Mode::Playing, ms(210)),
+            [Input::Mapping("key.jump", false)]
         );
     }
 
@@ -824,13 +887,20 @@ mod tests {
             touch.frame(Mode::Playing, now + HOLD),
             [Input::Mapping("key.attack", true)]
         );
+        // A tap with a third finger neither taps nor lets go of the attack.
+        touch.touch(&layout, 5, Phase::Start, [2400.0, 500.0], now + HOLD);
+        assert!(
+            touch
+                .touch(&layout, 5, Phase::End, [2400.0, 500.0], now + HOLD)
+                .is_empty()
+        );
         assert!(
             touch
                 .touch(&layout, 3, Phase::End, VIEW, now + HOLD)
                 .is_empty()
         );
         assert_eq!(
-            touch.touch(&layout, 4, Phase::End, VIEW, now + HOLD),
+            touch.touch(&layout, 4, Phase::End, VIEW, now + HOLD + MIN_STATE),
             [Input::Mapping("key.attack", false)]
         );
         assert_eq!(
