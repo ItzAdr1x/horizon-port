@@ -668,12 +668,10 @@ impl Window {
     /// ## Platform-specific
     ///
     /// - **iOS:** Can only be called on the main thread. Returns the top left coordinates of the
-    ///   window's [safe area] in the screen space coordinate system.
+    ///   window in the screen space coordinate system, as [`Window::outer_position`] does.
     /// - **Web:** Returns the top-left coordinates relative to the viewport. _Note: this returns
     ///   the same value as [`Window::outer_position`]._
     /// - **Android / Wayland:** Always returns [`NotSupportedError`].
-    ///
-    /// [safe area]: https://developer.apple.com/documentation/uikit/uiview/2891103-safeareainsets?language=objc
     #[inline]
     pub fn inner_position(&self) -> Result<PhysicalPosition<i32>, NotSupportedError> {
         let _span = tracing::debug_span!("winit::Window::inner_position",).entered();
@@ -748,11 +746,10 @@ impl Window {
     ///
     /// ## Platform-specific
     ///
-    /// - **iOS:** Can only be called on the main thread. Returns the `PhysicalSize` of the window's
-    ///   [safe area] in screen space coordinates.
+    /// - **iOS:** Can only be called on the main thread. Returns the `PhysicalSize` of the whole
+    ///   window in screen space coordinates, as `Resized` reports it.
     /// - **Web:** Returns the size of the canvas element. Doesn't account for CSS [`transform`].
     ///
-    /// [safe area]: https://developer.apple.com/documentation/uikit/uiview/2891103-safeareainsets?language=objc
     /// [`transform`]: https://developer.mozilla.org/en-US/docs/Web/CSS/transform
     #[inline]
     pub fn inner_size(&self) -> PhysicalSize<u32> {

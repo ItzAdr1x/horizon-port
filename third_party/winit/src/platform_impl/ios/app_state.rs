@@ -902,10 +902,6 @@ macro_rules! os_capabilities {
 }
 
 os_capabilities! {
-    /// <https://developer.apple.com/documentation/uikit/uiview/2891103-safeareainsets?language=objc>
-    #[allow(unused)] // error message unused
-    safe_area_err_msg: "-[UIView safeAreaInsets]",
-    safe_area: 11-0,
     /// <https://developer.apple.com/documentation/uikit/uiviewcontroller/2887509-setneedsupdateofhomeindicatoraut?language=objc>
     home_indicator_hidden_err_msg: "-[UIViewController setNeedsUpdateOfHomeIndicatorAutoHidden]",
     home_indicator_hidden: 11-0,

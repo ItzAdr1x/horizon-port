@@ -195,6 +195,11 @@ impl<T: 'static> EventLoop<T> {
             // `scene:willConnectToSession:options:`
             unsafe { UISceneWillConnectNotification },
             move |notification| {
+                // UIKit gives an app without a manifest a scene of its own too: that app
+                // launched at didFinishLaunching and makes its windows as before.
+                if !app_state::uses_scenes() {
+                    return;
+                }
                 let scene = unsafe { notification.object() }
                     .expect("UISceneWillConnectNotification to have a scene object");
                 // SAFETY: an application's scenes are window scenes on iOS.
