@@ -98,12 +98,17 @@ impl Game<'_> {
         device_id: DeviceId,
         inputs: Vec<Input>,
     ) {
-        // While a world opens or saves, only the pointer acts, through window_event's checks.
+        // While a world opens or saves, presses, clicks and looking are dropped; releases still
+        // go, so the touch state and the game agree, and the pointer meets window_event's checks.
         let busy = self.pending_save.is_some()
             || self.world_loader.is_some()
             || self.pending_entry.is_some();
         for input in inputs {
-            if busy && !matches!(input, Input::Pointer { .. }) {
+            let lets_go = matches!(
+                input,
+                Input::Pointer { .. } | Input::Mapping(_, false) | Input::Sprint(false)
+            );
+            if busy && !lets_go {
                 continue;
             }
             let result = match input {
@@ -118,7 +123,10 @@ impl Game<'_> {
                     Ok(())
                 }
                 Input::Mapping(mapping, down) => self.mapping_action(mapping, down),
-                Input::Sprint(on) => self.touch_sprint(on),
+                Input::Sprint(on) => {
+                    self.touch_sprint(on);
+                    Ok(())
+                }
                 Input::Sneak => self.touch_sneak(),
                 Input::Tap => self.touch_tap(),
                 Input::Hotbar(slot) => {
@@ -137,10 +145,9 @@ impl Game<'_> {
 
     /// Sprinting as the joystick wants it, set outright: under Sprint: Toggle a key's edges
     /// would flip it, and behind a screen they don't reach it.
-    fn touch_sprint(&mut self, on: bool) -> Result<()> {
+    fn touch_sprint(&mut self, on: bool) {
         self.toggles.set(SPRINT, on);
         self.sync_toggle(SPRINT);
-        Ok(())
     }
 
     /// The Sneak button flips sneaking: under Sneak: Toggle a press does, as for the pad's stick

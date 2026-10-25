@@ -14,12 +14,13 @@ use std::time::{Duration, Instant};
 use crate::hud::HudBatch;
 use crate::ui_theme::{self, Face, Ui, color};
 
+mod keys;
+use keys::Keys;
+#[cfg(test)]
+use keys::MIN_STATE;
+
 /// A finger held still on the view this long attacks.
 const HOLD: Duration = Duration::from_millis(300);
-/// A key mapping the controls hold stays down, and then up, at least this long: the game samples
-/// held keys once a tick (50 ms) in a frame, so a quicker tap, or the gap between the two taps
-/// of a quick double tap (flying), could fall between two ticks.
-const MIN_STATE: Duration = Duration::from_millis(70);
 /// How far (dp) a finger on the view may drift and still tap or hold.
 const SLOP: f32 = 12.0;
 /// The joystick's reach (dp): a finger this far from where it landed tilts it all the way.
@@ -248,63 +249,6 @@ impl Layout {
     }
 }
 
-/// The key mappings as the game has them, and the presses and releases still to send: each
-/// mapping changes at most once per `MIN_STATE`.
-#[derive(Default)]
-struct Keys {
-    /// Each mapping's latest edge, sent or queued: when, and down or up.
-    latest: Vec<(&'static str, Instant, bool)>,
-    /// Edges waiting their time, oldest first for each mapping.
-    queued: Vec<(Instant, &'static str, bool)>,
-}
-
-impl Keys {
-    /// Down at the game, or about to be.
-    fn down(&self, mapping: &str) -> bool {
-        self.latest.iter().any(|&(m, _, down)| m == mapping && down)
-    }
-    /// Press or release `mapping`: now, or `MIN_STATE` after its latest edge.
-    fn set(&mut self, mapping: &'static str, down: bool, now: Instant, out: &mut Vec<Input>) {
-        let latest = self.latest.iter().position(|(m, ..)| *m == mapping);
-        let at = match latest.map(|i| self.latest[i]) {
-            Some((_, _, state)) if state == down => return,
-            Some((_, when, _)) => (when + MIN_STATE).max(now),
-            None if !down => return,
-            None => now,
-        };
-        let waiting = self.queued.iter().any(|(_, m, _)| *m == mapping);
-        if at <= now && !waiting {
-            out.push(Input::Mapping(mapping, down));
-        } else {
-            self.queued.push((at, mapping, down));
-        }
-        match latest {
-            Some(i) => self.latest[i] = (mapping, at, down),
-            None => self.latest.push((mapping, at, down)),
-        }
-    }
-    /// The queued edges whose time has come.
-    fn due(&mut self, now: Instant, out: &mut Vec<Input>) {
-        self.queued.retain(|&(at, mapping, down)| {
-            let due = at <= now;
-            if due {
-                out.push(Input::Mapping(mapping, down));
-            }
-            !due
-        });
-    }
-    /// A screen opened: what is down goes up at once, and nothing queued is sent.
-    fn release_all(&mut self, now: Instant, out: &mut Vec<Input>) {
-        self.queued.clear();
-        for &mut (mapping, ref mut when, ref mut down) in &mut self.latest {
-            if std::mem::take(down) {
-                out.push(Input::Mapping(mapping, false));
-                *when = now;
-            }
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct Touch {
     fingers: Vec<Finger>,
@@ -515,8 +459,8 @@ impl Touch {
                 attacking: false,
                 ..
             } if now.duration_since(landed) < HOLD
-                && !self.keys.down("key.use")
-                && !self.keys.down("key.attack") =>
+                && !self.keys.held("key.use")
+                && !self.keys.held("key.attack") =>
             {
                 out.push(Input::Tap);
             }
