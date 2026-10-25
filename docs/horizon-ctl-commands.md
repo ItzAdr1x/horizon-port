@@ -69,6 +69,7 @@ Every command `horizon-ctl` takes, its MCP tool in `horizon-ctl mcp` (the launch
 | `mouse left\|right\|middle down\|up\|click` | `mouse` | Press or release a mouse button in the world | `button` (left, right, middle, required): button<br>`action` (down, up, click, required): what to do |
 | `interact-entity ID` | `interact_entity` | Right-click an entity: trade with a villager, mount a horse, ride a boat, shear a sheep | `id` (integer, required): entity id from entities |
 | `pad BUTTON down\|up\|tap \| pad stick left\|right X Y \| pad trigger left\|right V \| pad release \| pad status` | `pad` | A virtual controller: buttons, sticks and triggers as a real pad would send them | `what` (string, required): a button name, stick, trigger, release or status<br>`a` (string): down\|up\|tap, or left\|right<br>`b` (number): stick X or trigger value<br>`c` (number): stick Y |
+| `touch start\|move\|end ID X Y` | CLI only | A finger on a touch screen at GUI pixels X Y, as an iPhone or iPad reports one | `phase` (start, move, end, required): what the finger does<br>`id` (integer, required): the finger<br>`x` (number, required): GUI pixels from the left<br>`y` (number, required): GUI pixels from the top |
 | `release` | `release` | Release every key and mouse button | none |
 | `stop` | `stop` | Cancel the running action (goto, break...) and release every key | none |
 

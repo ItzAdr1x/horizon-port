@@ -221,19 +221,22 @@ impl Game<'_> {
                 }
                 Ok(())
             }
-            _ => {
-                let default = KeyBinds::default_of(action);
-                if let Some(button) = mouse_button(default) {
-                    if self.title.is_none() && self.screen == Screen::Playing {
-                        self.play_mouse(button, down)?;
-                    }
-                    Ok(())
-                } else if let Some(key) = key_code(default) {
-                    self.mapped_key(key, down, false)
-                } else {
-                    Ok(())
-                }
+            _ => self.mapping_action(action, down),
+        }
+    }
+
+    /// A vanilla mapping acts as its default key or mouse button (for the pad and touch).
+    pub(super) fn mapping_action(&mut self, action: &str, down: bool) -> Result<()> {
+        let default = KeyBinds::default_of(action);
+        if let Some(button) = mouse_button(default) {
+            if self.title.is_none() && self.screen == Screen::Playing {
+                self.play_mouse(button, down)?;
             }
+            Ok(())
+        } else if let Some(key) = key_code(default) {
+            self.mapped_key(key, down, false)
+        } else {
+            Ok(())
         }
     }
 

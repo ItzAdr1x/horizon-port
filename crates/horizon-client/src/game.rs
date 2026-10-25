@@ -158,6 +158,7 @@ mod text_displays;
 mod titles;
 mod tnt;
 mod totem;
+mod touch;
 mod trading;
 mod trial_spawner;
 mod trial_visuals;
@@ -1240,6 +1241,8 @@ struct Game<'a> {
     last_input: Instant,
     /// Controllers (Horizon's own).
     pad: pad::Pads,
+    /// Fingers on a touch screen.
+    touch: horizon_client::touch::Touch,
     frames: u64,
     /// Frames drawn with the player in the world, for `--world-frames`.
     world_frames: u64,
@@ -4108,7 +4111,7 @@ impl Game<'_> {
         self.tick_command_extras();
         self.tick_mods();
         let camera_eye = self.camera_eye_height();
-        let stick = self.pad_move();
+        let stick = self.pad_move().or(self.touch.stick());
         if self.riding.is_some() && self.player.is_some() {
             let playing = self.screen == Screen::Playing;
             let held = |k| playing && self.keys.contains(&k);
@@ -4545,7 +4548,7 @@ impl Game<'_> {
     fn apply_mouse_look(&mut self) {
         let look = self.look_options();
         let time = self.started.elapsed().as_secs_f64();
-        let pointer = self.captured || self.agent_pointer;
+        let pointer = self.captured || self.agent_pointer || self.touch.steering();
         let grabbed = pointer && self.screen == Screen::Playing && self.player.is_some();
         let active = self.focused || self.agent_pointer;
         if let Some((xo, yo)) = self
@@ -4796,6 +4799,7 @@ impl Game<'_> {
         self.frame_graph
             .draw(self.settings.horizon.overlay, &mut batch, &self.gui.atlas);
         self.draw_pad_cursor(&mut batch);
+        self.draw_touch(&mut batch);
         batch
     }
     fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
@@ -10871,6 +10875,14 @@ impl ApplicationHandler for Game<'_> {
             }
             return;
         }
+        // Touch controls on iOS, where fingers are the only input; elsewhere touch screens keep
+        // what the system makes of them.
+        if let WindowEvent::Touch(touch) = event {
+            if cfg!(target_os = "ios") {
+                self.touch_event(event_loop, id, touch);
+            }
+            return;
+        }
         let result: Result<()> = (|| {
             match event {
                 WindowEvent::CloseRequested => {
@@ -11602,6 +11614,7 @@ impl ApplicationHandler for Game<'_> {
             return;
         }
         self.poll_pads(event_loop);
+        self.touch_frame(event_loop);
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
             self.error = Some("frame-limited run timed out".into());
             event_loop.exit();
@@ -11768,6 +11781,7 @@ impl<'a> Game<'a> {
             previous: now,
             last_input: now,
             pad: Default::default(),
+            touch: Default::default(),
             frames: 0,
             world_frames: 0,
             fps: 0.0,
@@ -12895,6 +12909,7 @@ struct Loading {
     handle: Option<JoinHandle<()>>,
     shown: bool,
     menu: startup_menu::StartupMenu,
+    touch: horizon_client::touch::Touch,
     error: Option<Box<dyn std::error::Error>>,
 }
 impl Loading {
@@ -12957,7 +12972,13 @@ impl Loading {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
             return;
         }
-        if let Err(error) = self.menu_event(event_loop, event) {
+        let result = match event {
+            WindowEvent::Touch(touch) if cfg!(target_os = "ios") => {
+                self.touch_event(event_loop, touch)
+            }
+            event => self.menu_event(event_loop, event),
+        };
+        if let Err(error) = result {
             self.error = Some(error);
             event_loop.exit();
         }
@@ -13223,6 +13244,7 @@ fn run_loading(
         handle: Some(loader),
         shown: false,
         menu,
+        touch: Default::default(),
         error: None,
     };
     let mut app = App::Loading(Box::new(loading));

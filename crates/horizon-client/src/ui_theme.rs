@@ -294,12 +294,18 @@ pub struct Ui<'a> {
     pub density: f32,
     scale: f32,
 }
+/// Physical pixels per dp on a screen of `width` x `height` pixels: the screen reads like the
+/// launcher's 1040x700 window.
+pub fn density(width: f32, height: f32) -> f32 {
+    (width / 1040.0).min(height / 700.0).clamp(1.0, 4.0)
+}
+
 impl<'a> Ui<'a> {
     /// `cursor` is in GUI pixels, like every screen's input.
     pub fn new(atlas: &'a HudAtlas, batch: &'a mut HudBatch, cursor: (f32, f32)) -> Self {
         let scale = batch.scale;
         let (pw, ph) = (batch.width * scale, batch.height * scale);
-        let density = (pw / 1040.0).min(ph / 700.0).clamp(1.0, 4.0);
+        let density = density(pw, ph);
         Self {
             atlas,
             w: pw / density,

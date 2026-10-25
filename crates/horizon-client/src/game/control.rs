@@ -204,6 +204,7 @@ impl Game<'_> {
                 .chain(super::events::HELP)
                 .chain(super::saves_control::HELP)
                 .chain(super::pad::HELP)
+                .chain(super::touch::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
             "section-draws" => {
@@ -239,6 +240,7 @@ impl Game<'_> {
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "status" => Ok(Some(self.control_status())),
             "pad" => Ok(Some(self.pad_command(&words)?)),
+            "touch" => Ok(Some(self.touch_command(event_loop, &words)?)),
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
                 self.require_world()?;
