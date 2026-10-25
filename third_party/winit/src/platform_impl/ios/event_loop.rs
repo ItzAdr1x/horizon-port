@@ -19,7 +19,8 @@ use objc2_ui_kit::{
     UIApplicationDidEnterBackgroundNotification, UIApplicationDidFinishLaunchingNotification,
     UIApplicationDidReceiveMemoryWarningNotification, UIApplicationMain,
     UIApplicationWillEnterForegroundNotification, UIApplicationWillResignActiveNotification,
-    UIApplicationWillTerminateNotification, UIDevice, UIScreen, UIUserInterfaceIdiom,
+    UIApplicationWillTerminateNotification, UIDevice, UISceneWillConnectNotification, UIScreen,
+    UIUserInterfaceIdiom, UIWindowScene,
 };
 
 use crate::error::EventLoopError;
@@ -144,6 +145,7 @@ pub struct EventLoop<T: 'static> {
     //
     // Though we do still need to keep the observers around to prevent them from being deallocated.
     _did_finish_launching_observer: Retained<NSObject>,
+    _scene_will_connect_observer: Retained<NSObject>,
     _did_become_active_observer: Retained<NSObject>,
     _will_resign_active_observer: Retained<NSObject>,
     _will_enter_foreground_observer: Retained<NSObject>,
@@ -183,7 +185,21 @@ impl<T: 'static> EventLoop<T> {
             // `application:didFinishLaunchingWithOptions:`
             unsafe { UIApplicationDidFinishLaunchingNotification },
             move |_| {
-                app_state::did_finish_launching(mtm);
+                if !app_state::uses_scenes() {
+                    app_state::did_finish_launching(mtm);
+                }
+            },
+        );
+        let _scene_will_connect_observer = create_observer(
+            &center,
+            // `scene:willConnectToSession:options:`
+            unsafe { UISceneWillConnectNotification },
+            move |notification| {
+                let scene = unsafe { notification.object() }
+                    .expect("UISceneWillConnectNotification to have a scene object");
+                // SAFETY: an application's scenes are window scenes on iOS.
+                let scene: Retained<UIWindowScene> = unsafe { Retained::cast(scene) };
+                app_state::scene_will_connect(mtm, scene);
             },
         );
         let _did_become_active_observer = create_observer(
@@ -261,6 +277,7 @@ impl<T: 'static> EventLoop<T> {
             receiver,
             window_target: RootActiveEventLoop { p: ActiveEventLoop { mtm }, _marker: PhantomData },
             _did_finish_launching_observer,
+            _scene_will_connect_observer,
             _did_become_active_observer,
             _will_resign_active_observer,
             _will_enter_foreground_observer,

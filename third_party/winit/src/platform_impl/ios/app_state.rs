@@ -20,7 +20,8 @@ use objc2_foundation::{
     CGRect, CGSize, MainThreadMarker, NSInteger, NSObjectProtocol, NSOperatingSystemVersion,
     NSProcessInfo,
 };
-use objc2_ui_kit::{UIApplication, UICoordinateSpace, UIView, UIWindow};
+use objc2_foundation::{ns_string, NSBundle};
+use objc2_ui_kit::{UIApplication, UICoordinateSpace, UIView, UIWindow, UIWindowScene};
 
 use super::window::WinitUIWindow;
 use crate::dpi::PhysicalSize;
@@ -457,6 +458,30 @@ pub(crate) fn queue_gl_or_metal_redraw(mtm: MainThreadMarker, window: Retained<W
 
 pub(crate) fn will_launch(mtm: MainThreadMarker, queued_handler: EventLoopHandler) {
     AppState::get_mut(mtm).will_launch_transition(queued_handler)
+}
+
+thread_local! {
+    /// The scene UIKit connected, for apps on the UIScene life cycle: windows are made in it.
+    static WINDOW_SCENE: RefCell<Option<Retained<UIWindowScene>>> = const { RefCell::new(None) };
+}
+
+/// The app declares its scenes (`UIApplicationSceneManifest` in Info.plist), as the iOS 27 SDK
+/// requires: it launches when UIKit connects its scene, not when the application finishes
+/// launching, which comes first and has no scene to show a window in.
+pub(crate) fn uses_scenes() -> bool {
+    unsafe { NSBundle::mainBundle().objectForInfoDictionaryKey(ns_string!("UIApplicationSceneManifest")) }
+        .is_some()
+}
+
+pub(crate) fn window_scene() -> Option<Retained<UIWindowScene>> {
+    WINDOW_SCENE.with(|scene| scene.borrow().clone())
+}
+
+/// `UISceneWillConnectNotification`: the first scene launches the app.
+pub(crate) fn scene_will_connect(mtm: MainThreadMarker, scene: Retained<UIWindowScene>) {
+    if WINDOW_SCENE.with(|current| current.replace(Some(scene)).is_none()) {
+        did_finish_launching(mtm);
+    }
 }
 
 pub fn did_finish_launching(mtm: MainThreadMarker) {

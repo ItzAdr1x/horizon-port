@@ -80,7 +80,10 @@ impl WinitUIWindow {
         frame: CGRect,
         view_controller: &UIViewController,
     ) -> Retained<Self> {
-        let this: Retained<Self> = unsafe { msg_send_id![mtm.alloc(), initWithFrame: frame] };
+        let this: Retained<Self> = match app_state::window_scene() {
+            Some(scene) => unsafe { msg_send_id![mtm.alloc(), initWithWindowScene: &*scene] },
+            None => unsafe { msg_send_id![mtm.alloc(), initWithFrame: frame] },
+        };
 
         this.setRootViewController(Some(view_controller));
 
@@ -183,14 +186,10 @@ impl Inner {
         self.window.setBounds(bounds);
     }
 
+    /// The whole window, as `Resized` reports it, not its safe area: a surface made that size
+    /// is stretched over the view, which fills the window.
     pub fn inner_size(&self) -> PhysicalSize<u32> {
-        let scale_factor = self.scale_factor();
-        let safe_area = self.safe_area_screen_space();
-        let size = LogicalSize {
-            width: safe_area.size.width as f64,
-            height: safe_area.size.height as f64,
-        };
-        size.to_physical(scale_factor)
+        self.outer_size()
     }
 
     pub fn outer_size(&self) -> PhysicalSize<u32> {
@@ -497,8 +496,10 @@ impl Window {
 
         // TODO: transparency, visible
 
+        // The scene's screen: a foldable's main screen can be its other display.
         #[allow(deprecated)]
-        let main_screen = UIScreen::mainScreen(mtm);
+        let main_screen = app_state::window_scene()
+            .map_or_else(|| UIScreen::mainScreen(mtm), |scene| unsafe { scene.screen() });
         let fullscreen = window_attributes.fullscreen.clone().map(Into::into);
         let screen = match fullscreen {
             Some(Fullscreen::Exclusive(ref video_mode)) => video_mode.monitor.ui_screen(mtm),
@@ -508,8 +509,10 @@ impl Window {
 
         let screen_bounds = screen.bounds();
 
-        let frame = match window_attributes.inner_size {
-            Some(dim) => {
+        let frame = match (app_state::window_scene(), window_attributes.inner_size) {
+            // A window fills its scene.
+            (Some(scene), _) => unsafe { scene.coordinateSpace() }.bounds(),
+            (None, Some(dim)) => {
                 let scale_factor = screen.scale();
                 let size = dim.to_logical::<f64>(scale_factor as f64);
                 CGRect {
@@ -517,7 +520,7 @@ impl Window {
                     size: CGSize { width: size.width as _, height: size.height as _ },
                 }
             },
-            None => screen_bounds,
+            (None, None) => screen_bounds,
         };
 
         let view = WinitView::new(mtm, &window_attributes, frame);
