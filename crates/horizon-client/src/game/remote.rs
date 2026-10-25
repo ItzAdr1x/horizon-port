@@ -3125,6 +3125,8 @@ impl Game<'_> {
 
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
     pub(super) fn tick_remote(&mut self) -> Result<()> {
+        // Client mods tick with the client, single player's server thread included.
+        self.tick_mods();
         self.tick_remote_level()?;
         // Minecraft.tick sends this even when the player cannot tick yet,
         // including while waiting for chunks. Keep it outside early returns.

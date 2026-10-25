@@ -570,9 +570,15 @@ impl Game<'_> {
     /// ChatScreen.handleChatInput: history, then a command or a chat line.
     pub(super) fn handle_chat_input(&mut self, message: &str) {
         self.ui.chat.add_recent(message);
-        // On a server (single player's own included) the server runs it.
+        // On a server (single player's own included) the server runs it, but a client mod's
+        // command is the mod's.
         if self.remote.is_some() {
-            self.send_chat(message);
+            let mods_own = message
+                .strip_prefix('/')
+                .is_some_and(|command| self.mod_command(command));
+            if !mods_own {
+                self.send_chat(message);
+            }
             return;
         }
         if let Some(command) = message.strip_prefix('/') {
