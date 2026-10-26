@@ -148,8 +148,7 @@ impl Game<'_> {
         self.station = None;
         self.container = None;
         self.craft_size = 2;
-        self.screen = Screen::Inventory;
-        self.capture(false);
+        self.open_menu_screen();
     }
     /// E while riding a tamed mount opens its inventory instead of the player's.
     pub(super) fn open_ridden_mount_menu(&mut self) -> bool {

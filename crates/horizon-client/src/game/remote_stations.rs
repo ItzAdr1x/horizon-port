@@ -6,7 +6,7 @@
 //! do. The menu's client-side `slotsChanged` follows the server's slots, and
 //! its data slots come in `ClientboundContainerSetDataPacket`.
 use super::{
-    Game, Screen,
+    Game,
     stations::{Kind, Station},
 };
 use horizon_protocol::packets::play::{self, Serverbound as S};
@@ -28,8 +28,7 @@ impl Game<'_> {
         self.craft_size = 2;
         self.container = None;
         self.station = Some(Station::new_kind(kind, pos));
-        self.screen = Screen::Inventory;
-        self.capture(false);
+        self.open_menu_screen();
     }
 
     /// Window `container` is the server's workstation menu, open here.

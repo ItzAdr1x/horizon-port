@@ -24,6 +24,7 @@ pub(super) struct SignEditor {
 impl Game<'_> {
     /// `SignBlock.openTextEdit` for the front side after placement.
     pub(super) fn open_sign_editor(&mut self, pos: (i32, i32, i32), front: bool) {
+        self.screens_opened += 1;
         self.sign_edit = Some(SignEditor {
             pos,
             front,

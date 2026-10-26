@@ -1147,6 +1147,23 @@ fn select_creative_tab(
     clicks.skip_release();
 }
 
+/// What the screen shows, as an identity's parts (`Game::scene`).
+#[derive(Clone, Copy, Hash)]
+struct Scene {
+    screen: Screen,
+    /// The title's page, and the sub-screen of a screen with its own, hashed.
+    view: u64,
+    /// The menu behind an inventory screen: its container block, its station, the server's
+    /// window id, a mount's.
+    container: Option<(i32, i32, i32)>,
+    station: Option<std::mem::Discriminant<stations::Kind>>,
+    window: Option<i32>,
+    mount: bool,
+    /// Screens opened so far (`Game::screens_opened`).
+    opened: u64,
+    covers: Covers,
+}
+
 /// What can cover a world's screen and take the mouse from it.
 #[derive(Clone, Copy, Default, Hash)]
 struct Covers {
@@ -1330,6 +1347,9 @@ struct Game<'a> {
     craft_grid: Vec<Option<ItemStack>>,
     craft_size: usize,
     inv: ScreenClicks,
+    /// Menus, books and sign editors opened so far: part of the scene, as a server may open
+    /// another screen under the window id of the last.
+    screens_opened: u64,
     /// The Mouse Tweaks extra's drag and wheel (`tweaks`).
     tweaks: tweaks::Tweaks,
     /// While the touch controls hold Shift down: whether a keyboard already held it, in `keys`
@@ -3155,9 +3175,15 @@ impl Game<'_> {
             ));
             return;
         }
+        self.open_menu_screen();
+        self.right = false;
+    }
+    /// A menu's screen opens over the world (a container's, a station's, a mount's, a
+    /// merchant's): another screen, even where a server opens it under the window id of the last.
+    pub(super) fn open_menu_screen(&mut self) {
+        self.screens_opened += 1;
         self.screen = Screen::Inventory;
         self.capture(false);
-        self.right = false;
     }
     /// FallingBlockEntity.tick: fall with 0.04 gravity and 0.98 drag, then land.
     fn tick_falling(&mut self) -> Result<()> {
@@ -5590,22 +5616,20 @@ impl Game<'_> {
             | Screen::CommandBlock
             | Screen::Win => 0,
         };
-        let menu = (
-            self.container,
-            self.station.as_ref().map(|s| discriminant(&s.kind)),
-            self.remote
+        scene_id(Scene {
+            screen: self.screen,
+            view: scene_id((self.title.as_ref().map(title_page), view)),
+            container: self.container,
+            station: self.station.as_ref().map(|s| discriminant(&s.kind)),
+            window: self
+                .remote
                 .as_ref()
                 .and_then(|r| r.menu.as_ref())
                 .map(|m| m.0),
-            self.mount_active(),
-        );
-        scene_id((
-            self.screen,
-            self.title.as_ref().map(title_page),
-            view,
-            menu,
-            self.covers(),
-        ))
+            mount: self.mount_active(),
+            opened: self.screens_opened,
+            covers: self.covers(),
+        })
     }
     fn covers(&self) -> Covers {
         Covers {
@@ -11990,6 +12014,7 @@ impl<'a> Game<'a> {
             craft_grid: vec![None; 9],
             craft_size: 2,
             inv: ScreenClicks::new(0),
+            screens_opened: 0,
             tweaks: Default::default(),
             touch_shift: None,
             container: None,
@@ -13843,6 +13868,24 @@ mod tests {
             release(&mut inv, &slot),
             Release::Click(horizon_client::menu::Input::Pickup)
         );
+    }
+
+    #[test]
+    fn a_screen_opened_under_the_window_id_of_the_last_is_another_scene() {
+        // A server's 9x3 chest in window 2, then, with no close between, its 9x6 chest in window
+        // 2: under the same key, which no block has.
+        let chest = Scene {
+            screen: Screen::Inventory,
+            view: 0,
+            container: Some((i32::MIN, 0, 0)),
+            station: None,
+            window: Some(2),
+            mount: false,
+            opened: 7,
+            covers: Covers::default(),
+        };
+        assert_eq!(scene_id(chest), scene_id(Scene { ..chest }));
+        assert_ne!(scene_id(chest), scene_id(Scene { opened: 8, ..chest }));
     }
 
     #[test]

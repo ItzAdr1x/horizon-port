@@ -1073,8 +1073,7 @@ impl Game<'_> {
                     .block_entities
                     .insert(key, BlockEntity::Chest(c.items.clone()));
                 self.container = Some(key);
-                self.screen = super::Screen::Inventory;
-                self.capture(false);
+                self.open_menu_screen();
                 self.right = false;
                 if c.kind == CartKind::Chest {
                     let at = [c.position.x, c.position.y, c.position.z];
