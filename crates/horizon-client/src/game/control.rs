@@ -29,7 +29,8 @@ const HELP: &[&str] = &[
     "resume                         leave the pause menu",
     "screenshot PATH                write the next frame as PNG",
     "chat TEXT                      send a chat line or /command as if typed",
-    "type TEXT                      type into the open chat box (key enter tap sends)",
+    "type TEXT                      type into the focused text field (\\b deletes one character)",
+    "keyboard [show]                the system keyboard: the focused field, wanted, shown; show asks for it",
     "chat-log [N]                   the newest N chat messages (default 10)",
     "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs mods graphics graphics-advanced)",
     "stats [reset]                  frame-time summary since the last reset",
@@ -553,6 +554,12 @@ impl Game<'_> {
                     }
                 }
                 ok()
+            }
+            "keyboard" => {
+                if words.get(1) == Some(&"show") {
+                    self.request_keyboard();
+                }
+                Ok(Some(self.keyboard_status()))
             }
             "options" => {
                 use horizon_client::options_ui::Page;

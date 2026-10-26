@@ -1,6 +1,8 @@
 //! The interactive title before world resources exist. Uses only the menu
 //! atlas/panorama; transfers the actual screen and queued entry to Game.
+use super::typing::Field;
 use super::*;
+use horizon_client::osk::Output as Edit;
 use horizon_client::{
     clipboard::{self, AppendSelection, SystemClipboard},
     options_ui::{Event, OptionsUi, Page},
@@ -182,21 +184,29 @@ impl StartupMenu {
                 );
             }
             _ => {
-                let cleared = !title.has_caret_field()
-                    && title
-                        .focused_field()
-                        .is_some_and(|(id, value, _)| self.selection.take(id, value));
-                if cleared {
-                    title.search_changed();
-                }
-                if event.physical_key == PhysicalKey::Code(KeyCode::Backspace) {
-                    if !cleared {
-                        title.backspace();
-                    }
-                } else if let Some(text) = &event.text {
-                    title.type_text(text);
-                }
+                let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
+                self.title_edit(event.text.as_deref(), backspace);
             }
+        }
+    }
+
+    /// Typing or a backspace in a title field: in the server screens' append-only fields Select
+    /// All's selection is replaced first.
+    fn title_edit(&mut self, typed: Option<&str>, backspace: bool) {
+        let Some(title) = &mut self.title else { return };
+        let cleared = !title.has_caret_field()
+            && title
+                .focused_field()
+                .is_some_and(|(id, value, _)| self.selection.take(id, value));
+        if cleared {
+            title.search_changed();
+        }
+        if backspace {
+            if !cleared {
+                title.backspace();
+            }
+        } else if let Some(text) = typed {
+            title.type_text(text);
         }
     }
 }
@@ -419,6 +429,54 @@ impl Loading {
             }
         }
         self.save_menu_address();
+    }
+
+    /// The startup menu's focused field: an options search box, or a title field.
+    pub(super) fn typing_field(&self) -> Option<Field> {
+        let menu = &self.menu;
+        if self.gui.is_none() || menu.pending.is_some() || menu.win.is_some() {
+            None
+        } else if menu.options_open {
+            menu.options.typing().then_some(Field::Options)
+        } else {
+            menu.title
+                .as_ref()
+                .is_some_and(Title::typing)
+                .then_some(Field::Title)
+        }
+    }
+
+    /// An edit typed into the startup menu's focused field, as the key that makes it would.
+    pub(super) fn type_into_field(&mut self, edit: Edit) {
+        let (Some(field), Some(gui)) = (self.typing_field(), &self.gui) else {
+            return;
+        };
+        let atlas = &gui.atlas;
+        let key = match edit {
+            Edit::Backspace => KeyCode::Backspace,
+            _ => KeyCode::Enter,
+        };
+        match (field, edit) {
+            (_, Edit::Close) => {}
+            (Field::Options, Edit::Text(text)) => self.menu.options.type_text(atlas, &text),
+            (Field::Options, _) => {
+                let events = self.menu.options.key(&mut self.settings, atlas, key, None);
+                self.menu_option_events(events);
+            }
+            (Field::Title, edit) => {
+                match edit {
+                    Edit::Text(text) => self.menu.title_edit(Some(&text), false),
+                    Edit::Backspace => self.menu.title_edit(None, true),
+                    _ => {
+                        if let Some(title) = &mut self.menu.title {
+                            title.confirm_edit();
+                        }
+                    }
+                }
+                self.save_menu_address();
+            }
+            _ => {}
+        }
     }
 
     pub(super) fn menu_event(
@@ -695,8 +753,35 @@ mod tests {
             shown: false,
             menu: StartupMenu::default(),
             touch: Default::default(),
+            keyboard: Default::default(),
             error: None,
         }
+    }
+
+    #[test]
+    fn the_system_keyboard_types_into_a_title_field_while_the_game_loads() {
+        let root = std::env::temp_dir().join("horizon-startup-menu-system-keyboard");
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        let mut loading = loading(receiver);
+        loading.gui = Some(gui(&root));
+        loading.menu.set_root(root, &loading.settings);
+        assert_eq!(loading.typing_field(), None);
+        loading.menu.title.as_mut().unwrap().mode = horizon_client::title::Mode::Create {
+            name: String::new(),
+            seed: String::new(),
+            creative: false,
+            focus: 0,
+            options: Default::default(),
+        };
+        assert_eq!(loading.typing_field(), Some(Field::Title));
+        for text in ["M", "y", " ", "w"] {
+            loading.system_keyboard_text(text);
+        }
+        let title = loading.menu.title.as_ref().unwrap();
+        let horizon_client::title::Mode::Create { name, .. } = &title.mode else {
+            panic!("still on the create-world screen");
+        };
+        assert_eq!(name, "My w");
     }
 
     #[test]

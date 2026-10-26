@@ -1244,6 +1244,7 @@ struct Game<'a> {
     pad: pad::Pads,
     /// Fingers on a touch screen.
     touch: horizon_client::touch::Touch,
+    keyboard: typing::SystemKeyboard,
     frames: u64,
     /// Frames drawn with the player in the world, for `--world-frames`.
     world_frames: u64,
@@ -10787,6 +10788,20 @@ impl ApplicationHandler for Game<'_> {
             }
             return;
         }
+        // The system keyboard's text (`insertText:`) is a key no keyboard has, which the screens'
+        // key handlers drop: it goes to the focused field before them.
+        if cfg!(target_os = "ios")
+            && let WindowEvent::KeyboardInput { event, .. } = &event
+            && let PhysicalKey::Unidentified(_) = event.physical_key
+        {
+            if event.state == ElementState::Pressed
+                && let Some(text) = &event.text
+            {
+                self.last_input = Instant::now();
+                self.system_keyboard_text(text);
+            }
+            return;
+        }
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && let PhysicalKey::Code(key) = event.physical_key
         {
@@ -11631,6 +11646,7 @@ impl ApplicationHandler for Game<'_> {
         }
         self.poll_pads(event_loop);
         self.touch_frame(event_loop);
+        self.system_keyboard_frame();
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
             self.error = Some("frame-limited run timed out".into());
             event_loop.exit();
@@ -11798,6 +11814,7 @@ impl<'a> Game<'a> {
             last_input: now,
             pad: Default::default(),
             touch: Default::default(),
+            keyboard: Default::default(),
             frames: 0,
             world_frames: 0,
             fps: 0.0,
@@ -12926,6 +12943,7 @@ struct Loading {
     shown: bool,
     menu: startup_menu::StartupMenu,
     touch: horizon_client::touch::Touch,
+    keyboard: typing::SystemKeyboard,
     error: Option<Box<dyn std::error::Error>>,
 }
 impl Loading {
@@ -13000,6 +13018,18 @@ impl Loading {
             WindowEvent::Touch(touch) if cfg!(target_os = "ios") => {
                 self.touch_event(event_loop, touch)
             }
+            // The system keyboard's text, as in Game::window_event.
+            WindowEvent::KeyboardInput { event, .. }
+                if cfg!(target_os = "ios")
+                    && matches!(event.physical_key, PhysicalKey::Unidentified(_)) =>
+            {
+                if event.state == ElementState::Pressed
+                    && let Some(text) = &event.text
+                {
+                    self.system_keyboard_text(text);
+                }
+                Ok(())
+            }
             event => self.menu_event(event_loop, event),
         };
         if let Err(error) = result {
@@ -13047,6 +13077,7 @@ impl Loading {
             event_loop.exit();
             return;
         }
+        self.system_keyboard_frame();
         if let Some(w) = &self.window {
             if self.options.as_ref().is_some_and(|o| o.offscreen) {
                 self.draw();
@@ -13151,6 +13182,7 @@ impl Loading {
         game.panorama_rotation = self.panorama_rotation;
         self.menu.handoff(&mut game);
         game.touch = std::mem::take(&mut self.touch);
+        game.keyboard = std::mem::take(&mut self.keyboard);
         game.apply_settings();
         game.previous = Instant::now();
         log::info!(
@@ -13270,6 +13302,7 @@ fn run_loading(
         shown: false,
         menu,
         touch: Default::default(),
+        keyboard: Default::default(),
         error: None,
     };
     let mut app = App::Loading(Box::new(loading));

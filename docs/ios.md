@@ -143,6 +143,26 @@ game is open, so the controls along the edges keep it (not yet tried on a device
 `horizon-ctl touch start|move|end|cancel ID X Y` sends a finger as the screen would, on every
 platform, so the controls can be tested on a Mac.
 
+## Typing
+
+The iPhone's own keyboard types into every text field, in the player's layout and language.
+Chat, signs, books and command blocks bring it up as they open. Other fields wait for a tap on
+them, so the keyboard doesn't cover the items or the list the player came for: the creative and
+recipe book searches, the anvil's name, a world's name and seed, the options' searches.
+
+- While the keyboard is up, the game draws in the part of the screen above it, a little smaller.
+  It takes the whole screen again when the keyboard goes.
+- Return is Enter. It sends a chat line or runs a command, and starts the next line of a sign or
+  a book's page. In other fields it puts the keyboard away.
+- The keyboard goes when its field closes or loses the focus.
+- Nothing is corrected, capitalized or given curly quotes, so commands type as written.
+- A hardware keyboard (an iPad's, or the Mac's in the simulator) types the same way. iOS then
+  hides its own keyboard.
+- Input methods that compose characters (Japanese, Chinese) need marked text, which the game
+  doesn't take yet.
+- `horizon-ctl keyboard` says which field has the focus and whether the keyboard is up.
+  `horizon-ctl keyboard show` brings it up, as a tap on the field does.
+
 ## What is different on iOS
 
 - Windows come from a vendored winit 0.30 (`third_party/winit`) that launches on the UIScene life
@@ -151,6 +171,6 @@ platform, so the controls can be tested on a Mac.
 - The iOS simulator's Metal has no indirect draws, so the world draws one section at a time there;
   iPhones and iPads have them.
 - Code mods run on wasmtime's Pulley interpreter instead of cranelift's native code.
-- Not wired up yet: typing (chat, signs, world names: there is no on-screen keyboard for touch),
-  scrolling lists by dragging them (their scroll bars work) and game controllers. Multiplayer, LAN
-  and Play with Friends have not been tried on iOS, and neither has a physical device.
+- Not wired up yet: scrolling lists by dragging them (their scroll bars work) and game
+  controllers. Multiplayer, LAN and Play with Friends have not been tried on iOS, and neither has a
+  physical device.
