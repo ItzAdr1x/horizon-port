@@ -178,6 +178,6 @@ recipe book searches, the anvil's name, a world's name and seed, the options' se
 - The iOS simulator's Metal has no indirect draws, so the world draws one section at a time there;
   iPhones and iPads have them.
 - Code mods run on wasmtime's Pulley interpreter instead of cranelift's native code.
-- Not wired up yet: scrolling lists by dragging them (their scroll bars work) and game
+- Not wired up yet: dragging the resource pack screen's lists (their scroll bars work) and game
   controllers. Multiplayer, LAN and Play with Friends have not been tried on iOS, and neither has a
   physical device.
