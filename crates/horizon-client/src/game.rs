@@ -1212,6 +1212,16 @@ fn inventory_takes_mouse(screen: Screen, covers: Covers) -> bool {
         && !(title.is_some() || pack_prompt || book || sign)
 }
 
+/// A furnace screen's texture and title.
+fn furnace_screen(kind: horizon_client::containers::FurnaceKind) -> (&'static str, &'static str) {
+    use horizon_client::containers::FurnaceKind;
+    match kind {
+        FurnaceKind::Furnace => ("gui/container/furnace", "Furnace"),
+        FurnaceKind::BlastFurnace => ("gui/container/blast_furnace", "Blast Furnace"),
+        FurnaceKind::Smoker => ("gui/container/smoker", "Smoker"),
+    }
+}
+
 /// What an inventory screen keeps between clicks, as vanilla keeps it on its `Screen` object:
 /// another one (`ScreenObject`) starts afresh. A cover coming and going leaves them, as vanilla's
 /// pack prompt returns to the same `AbstractContainerScreen`.
@@ -5476,15 +5486,36 @@ impl Game<'_> {
             self.draw_slot_item(batch, drag.as_ref(), i, stack, ox + sx, oy + sy);
         }
     }
+    /// The furnaces' and the crafting screens' labels (`extractLabels`), the screens with a
+    /// recipe book; the others draw theirs with their backgrounds.
+    fn draw_inventory_labels(&self, batch: &mut HudBatch, ox: f32, oy: f32) {
+        let atlas = &self.gui.atlas;
+        let grey = rgba(64, 64, 64, 255);
+        match self
+            .container
+            .and_then(|k| self.world.block_entities.get(&k))
+        {
+            Some(BlockEntity::Furnace(f)) => {
+                let title = &self.container_title(furnace_screen(f.kind).1.to_owned());
+                let tw = HudBatch::text_width(atlas, title);
+                batch.text(atlas, title, ox + (176.0 - tw) / 2.0, oy + 6.0, grey, false);
+                batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+            }
+            None if !self.mount_active() => {
+                let tx = if self.craft_size == 3 { 29.0 } else { 97.0 };
+                batch.text(atlas, "Crafting", ox + tx, oy + 6.0, grey, false);
+                if self.craft_size == 3 {
+                    batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+                }
+            }
+            _ => {}
+        }
+    }
     fn draw_inventory(&mut self, batch: &mut HudBatch) {
         if self.draw_station(batch) {
             return;
         }
         let (ox, oy) = self.inventory_origin(batch);
-        // `AbstractRecipeBookScreen.extractRenderState`: under a book covering the menu, only the
-        // menu's background (`extractBackground`: the texture, the furnace's progress, the
-        // player) draws, without its labels, slots and widgets.
-        let covered = self.recipe_book_covers();
         {
             let atlas = &self.gui.atlas;
             batch.fill(
@@ -5512,7 +5543,6 @@ impl Game<'_> {
                     batch.rect_uv(dx, dy, w, h, r, u32::MAX);
                 }
             };
-            let grey = rgba(64, 64, 64, 255);
             match self
                 .container
                 .and_then(|k| self.world.block_entities.get(&k))
@@ -5520,24 +5550,8 @@ impl Game<'_> {
                 Some(BlockEntity::Chest(_)) if self.draw_machine_screen(batch, ox, oy) => {}
                 Some(BlockEntity::Chest(_)) => self.draw_chest_screen(batch, ox, oy),
                 Some(BlockEntity::Furnace(f)) => {
-                    let (tex, title) = match f.kind {
-                        horizon_client::containers::FurnaceKind::Furnace => {
-                            ("gui/container/furnace", "Furnace")
-                        }
-                        horizon_client::containers::FurnaceKind::BlastFurnace => {
-                            ("gui/container/blast_furnace", "Blast Furnace")
-                        }
-                        horizon_client::containers::FurnaceKind::Smoker => {
-                            ("gui/container/smoker", "Smoker")
-                        }
-                    };
+                    let (tex, _) = furnace_screen(f.kind);
                     part(batch, tex, 0.0, 0.0, 176.0, 166.0, ox, oy);
-                    if !covered {
-                        let title = &self.container_title(title.to_owned());
-                        let tw = HudBatch::text_width(atlas, title);
-                        batch.text(atlas, title, ox + (176.0 - tw) / 2.0, oy + 6.0, grey, false);
-                        batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
-                    }
                     if f.lit_remaining > 0 {
                         // AbstractFurnaceScreen: flame height ceil(lit * 13) + 1.
                         let total = if f.lit_total == 0 { 200 } else { f.lit_total };
@@ -5591,24 +5605,17 @@ impl Game<'_> {
                         "gui/container/inventory"
                     };
                     part(batch, texture, 0.0, 0.0, 176.0, 166.0, ox, oy);
-                    if !covered {
-                        let (title, tx) = if self.craft_size == 3 {
-                            ("Crafting", 29.0)
-                        } else {
-                            ("Crafting", 97.0)
-                        };
-                        batch.text(atlas, title, ox + tx, oy + 6.0, grey, false);
-                        if self.craft_size == 3 {
-                            batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
-                        }
-                    }
                 }
             }
         }
         if self.container.is_none() && self.craft_size != 3 && !self.mount_active() {
             self.draw_inventory_player(batch, ox, oy);
         }
-        if !covered {
+        // `AbstractRecipeBookScreen.extractRenderState`: under a book covering the menu, only the
+        // background above draws (`extractBackground`), without `extractContents`' labels, slots
+        // and widgets.
+        if !self.recipe_book_covers() {
+            self.draw_inventory_labels(batch, ox, oy);
             self.draw_inventory_slots(batch, ox, oy);
             self.draw_sort_buttons(batch, ox, oy);
         }
