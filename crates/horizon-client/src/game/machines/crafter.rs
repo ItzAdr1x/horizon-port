@@ -13,7 +13,7 @@ use serde_json::Value;
 
 /// `CrafterBlock`'s crafting animation length.
 const CRAFTING_TICKS: i32 = 6;
-const RESULT_SLOT: usize = 309;
+pub(in crate::game) const RESULT_SLOT: usize = 309;
 
 fn center(pos: Pos) -> [f64; 3] {
     [

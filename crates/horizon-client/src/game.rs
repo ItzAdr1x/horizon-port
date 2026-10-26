@@ -1172,6 +1172,89 @@ impl ScreenClicks {
     }
 }
 
+/// Where a menu's slots are among the game's slot ids, for the inventory, the crafting table and
+/// the block containers.
+#[derive(Clone, Copy)]
+struct MenuMap {
+    container: usize,
+    table: bool,
+    cells: usize,
+    plain: bool,
+}
+impl MenuMap {
+    fn main(&self) -> usize {
+        match (self.plain, self.table) {
+            (false, _) => self.container,
+            (true, true) => 10,
+            (true, false) => 9,
+        }
+    }
+    fn to_menu(self, g: usize) -> Option<usize> {
+        let main = self.main();
+        if self.plain {
+            match g {
+                100..109 if g - 100 < self.cells => Some(1 + g - 100),
+                500..504 if !self.table => Some(5 + g - 500),
+                504 if !self.table => Some(45),
+                9..36 => Some(main + g - 9),
+                0..9 => Some(main + 27 + g),
+                _ => None,
+            }
+        } else {
+            match g {
+                300.. if g < 300 + self.container => Some(g - 300),
+                9..36 => Some(main + g - 9),
+                0..9 => Some(main + 27 + g),
+                _ => None,
+            }
+        }
+    }
+    fn to_game(self, i: usize) -> Option<usize> {
+        let main = self.main();
+        if self.plain {
+            match i {
+                0 => None,
+                1..=9 if i - 1 < self.cells => Some(100 + i - 1),
+                5..9 if !self.table => Some(500 + i - 5),
+                45 if !self.table => Some(504),
+                _ if i >= main && i < main + 27 => Some(9 + i - main),
+                _ if i >= main + 27 && i < main + 36 => Some(i - main - 27),
+                _ => None,
+            }
+        } else if i < self.container {
+            Some(300 + i)
+        } else if i < self.container + 27 {
+            Some(9 + i - self.container)
+        } else {
+            Some(i - self.container - 27)
+        }
+    }
+}
+
+/// The open menu as the menu engine has it (`Game::menu_slots`).
+struct MenuSlots {
+    kind: horizon_client::menu::Kind,
+    /// Each menu slot's game slot: none for a result the game computes rather than keeps.
+    game_of: Vec<Option<usize>>,
+    map: Option<MenuMap>,
+    /// The game slot of that computed result (the crafting grid's, the crafter's), the menu's
+    /// output.
+    computed: Option<usize>,
+}
+
+impl MenuSlots {
+    /// The menu slot of game slot `g`.
+    fn to_menu(&self, g: usize) -> Option<usize> {
+        if self.computed == Some(g) {
+            return self.kind.output();
+        }
+        match self.map {
+            Some(map) => map.to_menu(g),
+            None => self.game_of.iter().position(|x| *x == Some(g)),
+        }
+    }
+}
+
 struct Game<'a> {
     /// Shared with an integrated server; `collision` and `motion` borrow from it.
     res: Arc<Resources>,
@@ -5258,13 +5341,9 @@ impl Game<'_> {
     }
     /// Slot `i` of the open menu is a result or output, as the menu engine has it: nothing can
     /// be put there, and a click with its item in hand takes another craft, trade or smelt.
-    pub(super) fn output_slot(&mut self, i: usize) -> bool {
-        let mut output = false;
-        self.menu_session(|menu, _, to_menu| {
-            output = to_menu(i).is_some_and(|s| menu.output(s));
-            Some(false)
-        });
-        output
+    pub(super) fn output_slot(&self, i: usize) -> bool {
+        self.menu_slots()
+            .is_some_and(|m| m.to_menu(i).is_some_and(|s| m.kind.output() == Some(s)))
     }
     fn craft_result(&self) -> Option<ItemStack> {
         self.craft_recipe().map(|(_, result)| result)
@@ -5643,79 +5722,10 @@ impl Game<'_> {
         };
         self.audio.play(sound, Some(at), volume, pitch);
     }
-    /// The open menu as the verified engine (`horizon_client::menu`): the
-    /// game's slots are copied in, `run` acts on it, and the slots, carried
-    /// stack, menu data and drops are copied back when it returns Some(true)
-    /// (Some(false): handled, nothing kept; None: not handled). False when the
-    /// open screen is not one the engine models or `run` did not handle it.
-    pub(super) fn menu_session(
-        &mut self,
-        run: impl FnOnce(
-            &mut horizon_client::menu::Menu,
-            &horizon_client::menu::Env,
-            &dyn Fn(usize) -> Option<usize>,
-        ) -> Option<bool>,
-    ) -> bool {
-        use horizon_client::menu::{Env, Kind, Menu};
-        #[derive(Clone, Copy)]
-        struct Map {
-            container: usize,
-            table: bool,
-            cells: usize,
-            plain: bool,
-        }
-        impl Map {
-            fn main(&self) -> usize {
-                match (self.plain, self.table) {
-                    (false, _) => self.container,
-                    (true, true) => 10,
-                    (true, false) => 9,
-                }
-            }
-            fn to_menu(self, g: usize) -> Option<usize> {
-                let main = self.main();
-                if self.plain {
-                    match g {
-                        200 => Some(0),
-                        100..109 if g - 100 < self.cells => Some(1 + g - 100),
-                        500..504 if !self.table => Some(5 + g - 500),
-                        504 if !self.table => Some(45),
-                        9..36 => Some(main + g - 9),
-                        0..9 => Some(main + 27 + g),
-                        _ => None,
-                    }
-                } else {
-                    match g {
-                        300.. if g < 300 + self.container => Some(g - 300),
-                        9..36 => Some(main + g - 9),
-                        0..9 => Some(main + 27 + g),
-                        _ => None,
-                    }
-                }
-            }
-            fn to_game(self, i: usize) -> Option<usize> {
-                let main = self.main();
-                if self.plain {
-                    match i {
-                        0 => None,
-                        1..=9 if i - 1 < self.cells => Some(100 + i - 1),
-                        5..9 if !self.table => Some(500 + i - 5),
-                        45 if !self.table => Some(504),
-                        _ if i >= main && i < main + 27 => Some(9 + i - main),
-                        _ if i >= main + 27 && i < main + 36 => Some(i - main - 27),
-                        _ => None,
-                    }
-                } else if i < self.container {
-                    Some(300 + i)
-                } else if i < self.container + 27 {
-                    Some(9 + i - self.container)
-                } else {
-                    Some(i - self.container - 27)
-                }
-            }
-        }
-        // Menu slot -> game slot, for every menu slot.
-        let mut plain_map = None;
+    /// The open menu as the menu engine has it: its kind, and where its slots are among the
+    /// game's. None for a screen the engine doesn't model.
+    fn menu_slots(&self) -> Option<MenuSlots> {
+        use horizon_client::menu::{Kind, Menu};
         let crafter_open = matches!(self.container_kind(), Some(BlockEntity::Crafter(_)));
         let loom_open = self
             .station
@@ -5736,7 +5746,7 @@ impl Game<'_> {
         let smithing_open = station_kind == Some(stations::Kind::Smithing);
         let enchanting_open = station_kind == Some(stations::Kind::Enchanting);
         let beacon_open = station_kind == Some(stations::Kind::Beacon);
-        let (kind, game_of): (Kind, Vec<Option<usize>>) = if self.creative_tab_open() {
+        let (kind, game_of) = if self.creative_tab_open() {
             // ItemPickerMenu: the display slots (clicked by the screen), then the hotbar.
             let mut v = vec![None; 45];
             v.extend((0..9).map(Some));
@@ -5845,9 +5855,9 @@ impl Game<'_> {
                         ),
                         3,
                     ),
-                    _ => return false,
+                    _ => return None,
                 };
-                let map = Map {
+                let map = MenuMap {
                     container: count,
                     table: false,
                     cells: 0,
@@ -5856,7 +5866,7 @@ impl Game<'_> {
                 (kind, map)
             } else if self.station.is_none() && !self.mount_active() {
                 let table = self.craft_size == 3;
-                let map = Map {
+                let map = MenuMap {
                     container: 0,
                     table,
                     cells: self.craft_size * self.craft_size,
@@ -5871,17 +5881,43 @@ impl Game<'_> {
                     map,
                 )
             } else {
-                return false;
+                return None;
             };
             let total = Menu::new(kind).slot_count();
-            plain_map = Some(map);
-            (kind, (0..total).map(|i| map.to_game(i)).collect())
+            return Some(MenuSlots {
+                kind,
+                game_of: (0..total).map(|i| map.to_game(i)).collect(),
+                map: Some(map),
+                computed: map.plain.then_some(200),
+            });
         };
-        // The plain map also takes the crafting result slot (a shift-click on it).
-        let to_menu = |g: usize| match plain_map {
-            Some(map) => map.to_menu(g),
-            None => game_of.iter().position(|x| *x == Some(g)),
+        let computed = (kind == Kind::CrafterBlock).then_some(machines::CRAFTER_RESULT);
+        Some(MenuSlots {
+            kind,
+            game_of,
+            map: None,
+            computed,
+        })
+    }
+    /// The open menu as the verified engine (`horizon_client::menu`): the
+    /// game's slots are copied in, `run` acts on it, and the slots, carried
+    /// stack, menu data and drops are copied back when it returns Some(true)
+    /// (Some(false): handled, nothing kept; None: not handled). False when the
+    /// open screen is not one the engine models or `run` did not handle it.
+    pub(super) fn menu_session(
+        &mut self,
+        run: impl FnOnce(
+            &mut horizon_client::menu::Menu,
+            &horizon_client::menu::Env,
+            &dyn Fn(usize) -> Option<usize>,
+        ) -> Option<bool>,
+    ) -> bool {
+        use horizon_client::menu::{Env, Kind, Menu};
+        let Some(slots) = self.menu_slots() else {
+            return false;
         };
+        let (kind, game_of) = (slots.kind, &slots.game_of);
+        let to_menu = |g: usize| slots.to_menu(g);
         let mut menu = Menu::new(kind);
         if matches!(kind, Kind::Mount(_)) {
             menu.mount = self.mount_menu_entity();
@@ -5931,7 +5967,11 @@ impl Game<'_> {
                 .collect();
             self.level_maps(&held)
         });
-        let next_map = if merchant_open { self.peek_map_id() } else { 0 };
+        let next_map = if kind == Kind::Merchant {
+            self.peek_map_id()
+        } else {
+            0
+        };
         let tag = |t: &str| self.structure_tag(t);
         let maps = trading::GameMaps {
             terrain: self.end.locator(),
@@ -5960,7 +6000,7 @@ impl Game<'_> {
         menu.creative = creative;
         menu.selected = self.selected;
         menu.levels = self.experience.level;
-        if anvil_open {
+        if kind == Kind::Anvil {
             // The rename box as AnvilScreen.onNameChanged gives it to the menu.
             menu.anvil.name = self.station.as_ref().map(|s| self.anvil_item_name(s));
         }
