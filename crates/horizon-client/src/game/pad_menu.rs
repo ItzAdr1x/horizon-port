@@ -155,6 +155,10 @@ impl Game<'_> {
             kind: Kind::Slot,
         };
         match self.screen {
+            // A recipe book covering the menu leaves only its own.
+            Screen::Inventory if self.recipe_book_covers() => {
+                targets.extend(self.recipe_book_targets());
+            }
             Screen::Inventory => {
                 let (ox, oy) = self.inventory_origin(&batch);
                 targets.extend(self.slots().into_iter().map(|i| {

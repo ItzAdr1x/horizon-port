@@ -1159,6 +1159,9 @@ fn select_creative_tab(
 struct Scene {
     object: ScreenObject,
     covers: Covers,
+    /// The recipe book: opening it, closing it or its covering the menu changes what the screen
+    /// shows, but not the screen.
+    recipe: recipe_book::RecipeScene,
 }
 
 /// The vanilla `Screen` object under whatever covers it, as an identity: another one keeps
@@ -5378,7 +5381,12 @@ impl Game<'_> {
             }
         }
     }
+    /// The slot under (`x`, `y`). Under a recipe book covering the menu, none
+    /// (`AbstractRecipeBookScreen.isHovering`).
     fn slot_at(&self, batch: &HudBatch, x: f32, y: f32) -> Option<usize> {
+        if self.recipe_book_covers() {
+            return None;
+        }
         let (ox, oy) = self.inventory_origin(batch);
         self.slots().into_iter().find(|&i| {
             let (sx, sy) = self.slot_position(i);
@@ -5473,6 +5481,10 @@ impl Game<'_> {
             return;
         }
         let (ox, oy) = self.inventory_origin(batch);
+        // `AbstractRecipeBookScreen.extractRenderState`: under a book covering the menu, only the
+        // menu's background (`extractBackground`: the texture, the furnace's progress, the
+        // player) draws, without its labels, slots and widgets.
+        let covered = self.recipe_book_covers();
         {
             let atlas = &self.gui.atlas;
             batch.fill(
@@ -5520,10 +5532,12 @@ impl Game<'_> {
                         }
                     };
                     part(batch, tex, 0.0, 0.0, 176.0, 166.0, ox, oy);
-                    let title = &self.container_title(title.to_owned());
-                    let tw = HudBatch::text_width(atlas, title);
-                    batch.text(atlas, title, ox + (176.0 - tw) / 2.0, oy + 6.0, grey, false);
-                    batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+                    if !covered {
+                        let title = &self.container_title(title.to_owned());
+                        let tw = HudBatch::text_width(atlas, title);
+                        batch.text(atlas, title, ox + (176.0 - tw) / 2.0, oy + 6.0, grey, false);
+                        batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+                    }
                     if f.lit_remaining > 0 {
                         // AbstractFurnaceScreen: flame height ceil(lit * 13) + 1.
                         let total = if f.lit_total == 0 { 200 } else { f.lit_total };
@@ -5577,14 +5591,16 @@ impl Game<'_> {
                         "gui/container/inventory"
                     };
                     part(batch, texture, 0.0, 0.0, 176.0, 166.0, ox, oy);
-                    let (title, tx) = if self.craft_size == 3 {
-                        ("Crafting", 29.0)
-                    } else {
-                        ("Crafting", 97.0)
-                    };
-                    batch.text(atlas, title, ox + tx, oy + 6.0, grey, false);
-                    if self.craft_size == 3 {
-                        batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+                    if !covered {
+                        let (title, tx) = if self.craft_size == 3 {
+                            ("Crafting", 29.0)
+                        } else {
+                            ("Crafting", 97.0)
+                        };
+                        batch.text(atlas, title, ox + tx, oy + 6.0, grey, false);
+                        if self.craft_size == 3 {
+                            batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+                        }
                     }
                 }
             }
@@ -5592,8 +5608,10 @@ impl Game<'_> {
         if self.container.is_none() && self.craft_size != 3 && !self.mount_active() {
             self.draw_inventory_player(batch, ox, oy);
         }
-        self.draw_inventory_slots(batch, ox, oy);
-        self.draw_sort_buttons(batch, ox, oy);
+        if !covered {
+            self.draw_inventory_slots(batch, ox, oy);
+            self.draw_sort_buttons(batch, ox, oy);
+        }
         self.draw_recipe_book(batch);
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
@@ -5653,6 +5671,7 @@ impl Game<'_> {
                 opened: self.screens_opened,
             },
             covers: self.covers(),
+            recipe: self.recipe_scene(),
         }
     }
     fn covers(&self) -> Covers {
@@ -6373,6 +6392,15 @@ impl Game<'_> {
     fn inventory_press(&mut self, right: bool) {
         use horizon_client::container_screen::Target;
         use horizon_client::menu::Input;
+        // `AbstractRecipeBookScreen.mouseClicked`: a book covering the menu takes the press, used
+        // or not. Its release clicks nothing either, though vanilla's would reach the menu: a
+        // stack in hand would be thrown beyond the panel, or put in a slot a placement just
+        // uncovered.
+        if self.recipe_book_covers() {
+            self.inv.clicks.skip_release();
+            self.recipe_book_click(right);
+            return;
+        }
         if !right && self.sort_press() {
             return;
         }
@@ -13879,6 +13907,7 @@ mod tests {
                 opened,
             },
             covers: Covers::default(),
+            recipe: recipe_book::RecipeScene::default(),
         }
     }
 
@@ -13959,6 +13988,35 @@ mod tests {
         );
         // Fingers on the inventory do nothing more once the prompt covers it.
         assert_ne!(scene_id(prompt), scene_id(chest));
+    }
+
+    #[test]
+    fn the_recipe_book_over_the_menu_spends_the_fingers_but_keeps_the_screen() {
+        use recipe_book::{Presentation, RecipeScene};
+        let book = |presentation, alternatives| Scene {
+            recipe: RecipeScene {
+                presentation,
+                alternatives,
+            },
+            ..chest(7)
+        };
+        let docked = book(Presentation::Docked, false);
+        let mut inv = ScreenClicks::default();
+        inv.follow(docked);
+        inv.last_click = Some((std::time::Instant::now(), 3, false));
+        for other in [
+            book(Presentation::Modal, false),
+            book(Presentation::Closed, false),
+            book(Presentation::Docked, true),
+        ] {
+            inv.follow(other);
+            assert!(inv.last_click.is_some(), "the book is part of the screen");
+            assert_ne!(
+                scene_id(other),
+                scene_id(docked),
+                "a finger on the last one is spent"
+            );
+        }
     }
 
     #[test]

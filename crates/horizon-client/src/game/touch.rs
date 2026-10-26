@@ -182,6 +182,10 @@ impl Game<'_> {
         if self.recipe_alternatives_at(p) {
             return Some(Spot::Secondary);
         }
+        // A book covering the menu takes every press, beyond the panel too.
+        if self.recipe_book_covers() {
+            return None;
+        }
         if self.clicked_outside_at(batch, p) {
             return Some(Spot::Outside);
         }

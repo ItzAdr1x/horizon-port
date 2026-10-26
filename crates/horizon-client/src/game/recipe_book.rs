@@ -30,6 +30,40 @@ const SWAP_TICKS: f32 = 30.0;
 /// Widest GUI at which the book sits next to the menu (`widthTooNarrow`).
 const NARROW: f32 = 379.0;
 
+/// How the open screen shows its recipe book.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(super) enum Presentation {
+    /// The screen has no book.
+    #[default]
+    Absent,
+    /// Only the green book button shows.
+    Closed,
+    /// The open book sits beside the menu, which works as it does without it.
+    Docked,
+    /// The open book covers the menu (`widthTooNarrow && isVisible()`): the menu under it is not
+    /// drawn, hovers nothing and takes no click, and Escape hides only the book.
+    Modal,
+}
+impl Presentation {
+    /// A book open or closed (None: the screen has none) on a GUI `width` wide.
+    fn of(open: Option<bool>, width: f32) -> Self {
+        match open {
+            None => Self::Absent,
+            Some(false) => Self::Closed,
+            Some(true) if width < NARROW => Self::Modal,
+            Some(true) => Self::Docked,
+        }
+    }
+}
+
+/// The book as touch's scene (`Game::scene`) tells it apart: a finger down when it opens,
+/// closes, covers the menu or shows its alternatives does nothing more.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(super) struct RecipeScene {
+    pub(super) presentation: Presentation,
+    pub(super) alternatives: bool,
+}
+
 /// A ghost recipe slot: the items it cycles through.
 struct Ghost {
     slot: usize,
@@ -143,6 +177,38 @@ impl Game<'_> {
     }
     fn book_open(&self, book: BookType) -> bool {
         self.level.recipe_book.open[book.index()]
+    }
+    /// The open screen's book is open; None when the screen has none.
+    pub(super) fn recipe_book_open(&self) -> Option<bool> {
+        self.active_book().map(|b| self.book_open(b))
+    }
+    /// How the open screen shows its book at the window's GUI size (Absent without a window).
+    pub(super) fn recipe_presentation(&self) -> Presentation {
+        self.batch_for_size().map_or(Presentation::Absent, |batch| {
+            Presentation::of(self.recipe_book_open(), batch.width)
+        })
+    }
+    /// The open book covers the menu (`Presentation::Modal`).
+    pub(super) fn recipe_book_covers(&self) -> bool {
+        self.recipe_presentation() == Presentation::Modal
+    }
+    pub(super) fn recipe_scene(&self) -> RecipeScene {
+        RecipeScene {
+            presentation: self.recipe_presentation(),
+            alternatives: self.recipe_ui.overlay.is_some(),
+        }
+    }
+    /// `RecipeBookComponent.setVisible`: the one writer of a book's open flag here (the server's
+    /// settings packet aside). A closed book drops its alternatives (`RecipeBookPage.setInvisible`)
+    /// and its search box's focus (vanilla's comes back unfocused, `initVisuals`).
+    fn set_book_open(&mut self, book: BookType, open: bool) {
+        self.level.recipe_book.open[book.index()] = open;
+        if !open {
+            self.recipe_ui.overlay = None;
+            if let Some(search) = self.recipe_ui.search.as_mut() {
+                search.focused = false;
+            }
+        }
     }
     fn book_filtering(&self, book: BookType) -> bool {
         self.level.recipe_book.filtering[book.index()]
@@ -583,7 +649,8 @@ impl Game<'_> {
     // ---- clicks ----
 
     /// A click while a screen with a recipe book is open; true when the book
-    /// used it.
+    /// used it. A book covering the menu takes every click, used or not
+    /// (`AbstractRecipeBookScreen.mouseClicked`).
     pub(super) fn recipe_book_click(&mut self, right: bool) -> bool {
         let Some(book_type) = self.active_book() else {
             return false;
@@ -592,6 +659,7 @@ impl Game<'_> {
             return false;
         };
         self.ensure_book();
+        let covers = self.recipe_book_covers();
         let cursor = self.cursor;
         let (ox, _) = self.inventory_origin(&batch);
         // Clicking a crafting slot drops the ghost recipe (`slotClicked`).
@@ -601,19 +669,16 @@ impl Game<'_> {
             self.recipe_ui.last_placed = None;
             self.recipe_ui.ghost.clear();
         }
+        // The green button is one of the menu's widgets, which a covering book hides.
         let (bx, by) = self.book_button_pos(book_type, ox, &batch);
-        if inside(cursor, bx, by, 20.0, 18.0) {
-            let open = !self.book_open(book_type);
-            self.level.recipe_book.open[book_type.index()] = open;
-            if !open {
-                self.recipe_ui.overlay = None;
-            }
+        if !covers && inside(cursor, bx, by, 20.0, 18.0) {
+            self.set_book_open(book_type, !self.book_open(book_type));
             self.audio
                 .play("minecraft:ui.button.click", None, 0.25, 1.0);
             return true;
         }
         if !self.book_open(book_type) || self.spectator() {
-            return false;
+            return covers;
         }
         self.refresh_book_view(book_type);
         let (xo, yo) = self.book_origin(&batch);
@@ -708,7 +773,7 @@ impl Game<'_> {
                 return true;
             }
         }
-        false
+        covers
     }
     /// A recipe button at `p` (GUI pixels) with more than one recipe: its right click opens the
     /// alternatives.
@@ -735,9 +800,9 @@ impl Game<'_> {
     pub(super) fn recipe_book_known(&self) -> usize {
         self.recipe_ui.client.displays().len()
     }
-    /// The recipe book's buttons a controller can focus: the book button,
-    /// recipes, page arrows, the craftable filter and the tabs (GUI pixels;
-    /// the search box registers itself as a field).
+    /// The recipe book's buttons a controller can focus: the book button
+    /// (unless the book covers it), recipes, page arrows, the craftable filter
+    /// and the tabs (GUI pixels; the search box registers itself as a field).
     pub(super) fn recipe_book_targets(&self) -> Vec<horizon_client::widgets::Target> {
         use horizon_client::widgets::{Kind, Target};
         let (Some(book_type), Some(batch)) = (self.active_book(), self.batch_for_size()) else {
@@ -747,9 +812,12 @@ impl Game<'_> {
             rect,
             kind: Kind::Button,
         };
-        let (ox, _) = self.inventory_origin(&batch);
-        let (bx, by) = self.book_button_pos(book_type, ox, &batch);
-        let mut out = vec![button([bx, by, 20.0, 18.0])];
+        let mut out = Vec::new();
+        if !self.recipe_book_covers() {
+            let (ox, _) = self.inventory_origin(&batch);
+            let (bx, by) = self.book_button_pos(book_type, ox, &batch);
+            out.push(button([bx, by, 20.0, 18.0]));
+        }
         if !self.book_open(book_type) || self.spectator() {
             return out;
         }
@@ -1018,7 +1086,8 @@ impl Game<'_> {
 
     // ---- drawing ----
 
-    /// The book button, ghost recipe and the open book.
+    /// The book button, ghost recipe and the open book. A book covering the menu draws alone:
+    /// the button and the ghost are the menu's (its widgets and `extractSlots`).
     pub(super) fn draw_recipe_book(&mut self, batch: &mut HudBatch) {
         let Some(book_type) = self.active_book() else {
             return;
@@ -1027,21 +1096,23 @@ impl Game<'_> {
         if !self.shift_down_or_ctrl() {
             self.recipe_ui.time += self.frame_ticks;
         }
-        let (ox, _) = self.inventory_origin(batch);
-        let cursor = self.cursor;
-        let (bx, by) = self.book_button_pos(book_type, ox, batch);
-        let hover = inside(cursor, bx, by, 20.0, 18.0);
-        batch.sprite(
-            &self.gui.atlas,
-            &sprite(if hover {
-                "button_highlighted"
-            } else {
-                "button"
-            }),
-            bx,
-            by,
-        );
-        self.draw_ghost(batch, book_type);
+        if !self.recipe_book_covers() {
+            let (ox, _) = self.inventory_origin(batch);
+            let cursor = self.cursor;
+            let (bx, by) = self.book_button_pos(book_type, ox, batch);
+            let hover = inside(cursor, bx, by, 20.0, 18.0);
+            batch.sprite(
+                &self.gui.atlas,
+                &sprite(if hover {
+                    "button_highlighted"
+                } else {
+                    "button"
+                }),
+                bx,
+                by,
+            );
+            self.draw_ghost(batch, book_type);
+        }
         if !self.book_open(book_type) {
             return;
         }
@@ -1347,7 +1418,7 @@ fn sub_rect(r: Rect, [x, y, w, h]: [f32; 4]) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::{Overlay, RecipeUi};
+    use super::{Overlay, Presentation, RecipeUi};
     use horizon_client::{
         ui::EditBox,
         widgets::{self, Kind},
@@ -1379,5 +1450,18 @@ mod tests {
         assert_eq!(fields(&mut ui), Vec::<[f32; 4]>::new());
         let edit = ui.search.as_ref().unwrap();
         assert_eq!((edit.x, edit.y), (125.0, 63.0), "clicks still find the box");
+    }
+
+    #[test]
+    fn an_open_book_covers_the_menu_below_a_gui_379_wide() {
+        // The unfolded iPhone Duo's GUI is 357 wide, an iPad's 344.
+        for width in [344.0, 357.0, 378.0] {
+            assert_eq!(Presentation::of(Some(true), width), Presentation::Modal);
+        }
+        for width in [379.0, 380.0, 427.0] {
+            assert_eq!(Presentation::of(Some(true), width), Presentation::Docked);
+        }
+        assert_eq!(Presentation::of(Some(false), 357.0), Presentation::Closed);
+        assert_eq!(Presentation::of(None, 357.0), Presentation::Absent);
     }
 }
