@@ -227,22 +227,94 @@ fn a_tap_that_wanders_inside_its_slot_is_still_a_tap() {
 
 #[test]
 fn left_is_the_slot_for_slots_and_the_slop_elsewhere() {
-    let slop = 32.0;
+    // The slop is 32 pixels on this layout.
+    let layout = Layout::new(2622, 1206, 3.0);
+    let left = |landed: &Here, here: &Here, at| left(landed, A, here, at, &layout, false);
     let near = [A[0] + 20.0, A[1]];
     let far = [A[0] + 40.0, A[1]];
     let plain = Here::default();
-    assert!(!left(&plain, A, &plain, near, slop));
-    assert!(left(&plain, A, &plain, far, slop));
-    assert!(!left(&slot(3), A, &slot(3), far, slop));
-    assert!(left(&slot(3), A, &slot(4), near, slop));
-    assert!(left(&slot(3), A, &plain, near, slop));
+    assert!(!left(&plain, &plain, near));
+    assert!(left(&plain, &plain, far));
+    assert!(!left(&slot(3), &slot(3), far));
+    assert!(left(&slot(3), &slot(4), near));
+    assert!(left(&slot(3), &plain, near));
     // In a list, a slot is a row like any other: the slop decides.
     let listed = Here {
         list: Some(54.0),
         ..slot(3)
     };
-    assert!(!left(&listed, A, &listed, near, slop));
-    assert!(left(&listed, A, &listed, far, slop));
+    assert!(!left(&listed, &listed, near));
+    assert!(left(&listed, &listed, far));
+}
+
+/// A slot's pitch, 18 GUI pixels, at the test layout's GUI scale of 5.
+const PITCH: f64 = 90.0;
+
+#[test]
+fn a_carried_tap_that_rolls_into_a_gap_still_puts_the_stack_on_its_slot() {
+    let gap = [A[0] + 45.0, A[1] + 10.0];
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, gap, Here::default()), now),
+        [Input::Pointer(gap)]
+    );
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, gap, Here::default()), now),
+        [
+            Input::Pointer(A),
+            press(false),
+            Input::Release(LEFT),
+            Input::Pointer(AWAY)
+        ]
+    );
+    // With an empty hand the gap is off the slot: the stack is dragged.
+    let (mut touch, layout, now) = menu();
+    touch.on(&layout, event(1, Phase::Start, A, slot(3)), now);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, gap, Here::default()), now),
+        [Input::Pointer(A), press(true), Input::Pointer(gap)]
+    );
+}
+
+#[test]
+fn a_carried_stack_spreads_once_the_finger_really_leaves_its_slot() {
+    let background = [A[0] + PITCH + 10.0, A[1]];
+    let near = [A[0] + 20.0, A[1]];
+    for (to, over) in [
+        (background, Here::default()),
+        (near, spot(Spot::Outside)),
+        (near, empty(4)),
+    ] {
+        let (mut touch, layout, now) = holding();
+        touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+        assert_eq!(
+            touch.on(&layout, event(1, Phase::Move, to, over), now),
+            [Input::Pointer(A), press(true), Input::Pointer(to)],
+            "{over:?}"
+        );
+    }
+}
+
+#[test]
+fn a_carried_tap_lifted_beside_the_trash_is_not_shifted_by_the_latch() {
+    let (mut touch, layout, now) = inventory();
+    hand(&mut touch, true, now);
+    tap_shift(&mut touch, &layout, now);
+    let trash = slot_of(TRASH_ID, false, SlotKind::Trash);
+    let gap = [A[0] + 45.0, A[1]];
+    touch.on(&layout, event(1, Phase::Start, A, trash), now);
+    touch.on(&layout, event(1, Phase::Move, gap, Here::default()), now);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, gap, Here::default()), now),
+        [
+            Input::Pointer(A),
+            press(false),
+            Input::Release(LEFT),
+            Input::Pointer(AWAY)
+        ]
+    );
+    assert!(tap_shifted(&mut touch, &layout, 2, slot(3), now));
 }
 
 #[test]

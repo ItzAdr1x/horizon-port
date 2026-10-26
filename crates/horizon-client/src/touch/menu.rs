@@ -168,12 +168,29 @@ pub(super) fn hold(landed: &Here, carrying: bool) -> Hold {
     }
 }
 
+/// A slot's pitch in GUI pixels: its 16-pixel box and the gap to the next.
+const SLOT_PITCH: f32 = 18.0;
+
 /// The finger has left where it landed: its slot, for a slot outside a list (a tap may wander
-/// inside a slot); its slop anywhere else.
-pub(super) fn left(landed: &Here, from: [f64; 2], here: &Here, at: [f64; 2], slop: f32) -> bool {
+/// inside a slot); its slop anywhere else. With a stack in hand, a resting fingertip rolls into
+/// the 2-pixel gaps beside its slot, and a spread there would scatter the stack: it leaves only
+/// for another slot, beyond the panel, or a slot's pitch of the panel's background away.
+pub(super) fn left(
+    landed: &Here,
+    from: [f64; 2],
+    here: &Here,
+    at: [f64; 2],
+    layout: &Layout,
+    carrying: bool,
+) -> bool {
+    let moved = ((at[0] - from[0]) as f32).hypot((at[1] - from[1]) as f32);
     match (landed.spot, landed.list) {
-        (Spot::Slot(s), None) => !matches!(here.spot, Spot::Slot(t) if t.id == s.id),
-        _ => ((at[0] - from[0]) as f32).hypot((at[1] - from[1]) as f32) > slop,
+        (Spot::Slot(s), None) => match here.spot {
+            Spot::Slot(t) => t.id != s.id,
+            Spot::Outside => true,
+            _ => !carrying || moved > SLOT_PITCH * layout.gui,
+        },
+        _ => moved > layout.slop(),
     }
 }
 
@@ -327,7 +344,7 @@ impl Touch {
             from, here: landed, ..
         } = *gesture
         {
-            if !left(&landed, from, &here, at, layout.slop()) {
+            if !left(&landed, from, &here, at, layout, self.context.carrying) {
                 out.push(Input::Pointer(at));
                 return;
             }
@@ -412,6 +429,19 @@ impl Touch {
             out.push(Input::Pointer(AWAY));
             return;
         }
+        let (at, here) = match gesture {
+            // A stack in hand put down from a slot's gap goes on the slot the finger landed on,
+            // which it never left (`left`).
+            Gesture::Pending {
+                from, here: landed, ..
+            } if self.context.carrying
+                && matches!((landed.spot, landed.list), (Spot::Slot(_), None))
+                && !matches!(here.spot, Spot::Slot(_) | Spot::Outside) =>
+            {
+                (from, landed)
+            }
+            _ => (at, here),
+        };
         out.push(Input::Pointer(at));
         match gesture {
             // Fingers miss on a big screen, and a stack thrown into the world can't be taken
