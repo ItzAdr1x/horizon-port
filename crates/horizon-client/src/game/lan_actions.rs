@@ -112,6 +112,7 @@ pub(super) struct GuestSwap {
     xp: Experience,
     host_keys: std::collections::HashSet<KeyCode>,
     screen: Screen,
+    screens_opened: u64,
     host_sign: Option<super::sign_edit::SignEditor>,
     host_book: Option<super::books::BookScreen>,
     host_command_block: Option<super::command_blocks::CommandBlockScreen>,
@@ -300,6 +301,9 @@ impl Game<'_> {
         // mount menu the guest's action opens is not drawn over the host's
         // world (#687). The guest's client opens its own.
         let screen = std::mem::replace(&mut self.screen, Screen::Playing);
+        // The host's count of screens opened stays theirs too: their touch and clicks follow it
+        // (`Game::scene`).
+        let screens_opened = self.screens_opened;
         let host_sign = self.sign_edit.take();
         let host_book = self.book.take();
         let host_command_block = self.command_block_screen.take();
@@ -385,6 +389,7 @@ impl Game<'_> {
             xp,
             host_keys,
             screen,
+            screens_opened,
             host_sign,
             host_book,
             host_command_block,
@@ -440,6 +445,7 @@ impl Game<'_> {
             xp,
             host_keys,
             screen,
+            screens_opened,
             host_sign,
             host_book,
             host_command_block,
@@ -519,6 +525,7 @@ impl Game<'_> {
         std::mem::swap(&mut self.mount, &mut play.mount);
         self.container = container;
         self.screen = screen;
+        self.screens_opened = screens_opened;
         // A sign the guest's placement opened (SignBlock.openTextEdit).
         let guest_sign = std::mem::replace(&mut self.sign_edit, host_sign);
         // A lectern the guest's use opened (LecternBlock.openScreen).
