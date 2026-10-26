@@ -827,6 +827,7 @@ pub fn append_field(
     invert_text: bool,
     focused_ms: u128,
 ) {
+    crate::widgets::target_as([x, y - 1.0, width, 11.0], crate::widgets::Kind::Field);
     let mut cursor_x = x;
     if !value.is_empty() {
         batch.text(atlas, value, x, y, color, shadow);
@@ -1352,6 +1353,30 @@ mod tests {
         let q = quads(&batch);
         assert_quad(q[0], ([0.0, 0.0, 4.0, 8.0], [0.0, 0.0, 0.2, 0.4]));
         assert_quad(q[2], ([5.0, 0.0, 9.0, 8.0], [0.8, 0.0, 1.0, 0.4]));
+    }
+    #[test]
+    fn an_append_field_is_a_text_field_a_finger_can_tap() {
+        let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        crate::widgets::end_frame(u64::MAX - 1);
+        let mut b = HudBatch::new([854, 480]);
+        append_field(
+            &mut b,
+            &atlas,
+            "",
+            (10.0, 20.0, 80.0),
+            (u32::MAX, true),
+            50,
+            false,
+            true,
+            0,
+        );
+        crate::widgets::end_frame(u64::MAX);
+        let fields: Vec<_> = crate::widgets::last_targets()
+            .into_iter()
+            .filter(|t| t.kind == crate::widgets::Kind::Field)
+            .map(|t| t.rect)
+            .collect();
+        assert_eq!(fields, vec![[10.0, 19.0, 80.0, 11.0]]);
     }
     #[test]
     fn append_fields_highlight_the_whole_value_and_blink_their_cursor() {

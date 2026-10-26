@@ -1064,6 +1064,12 @@ impl Game<'_> {
     /// out by `horizon_client::recipe_book_screen`.
     fn draw_book_panel(&mut self, batch: &mut HudBatch, book_type: BookType) {
         let (xo, yo) = self.book_origin(batch);
+        // The search box, 81 by 14 (`recipe_book_screen::search_box`): a finger's tap there
+        // asks for the keyboard.
+        horizon_client::widgets::target_as(
+            [xo + 25.0, yo + 13.0, 81.0, 14.0],
+            horizon_client::widgets::Kind::Field,
+        );
         let cursor = self.cursor;
         let atlas = &self.gui.atlas;
         let search = match self.recipe_ui.search.as_mut() {
