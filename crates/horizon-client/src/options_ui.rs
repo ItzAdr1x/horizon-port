@@ -3404,9 +3404,6 @@ mod tests {
                 assert_eq!(s.gui_scale, expected);
             }
             s.gui_scale = u32::MAX;
-            s.clamp_gui_scale(framebuffer);
-            assert_eq!(s.gui_scale, max);
-            s.gui_scale = u32::MAX;
             Opt::GuiScale.cycle(&mut s, false, framebuffer);
             assert_eq!(s.gui_scale, 0);
             s.gui_scale = u32::MAX;
@@ -3420,6 +3417,15 @@ mod tests {
         // A resized window supplies a new maximum on the next interaction.
         Opt::GuiScale.cycle(&mut s, true, [854, 480]);
         assert_eq!(s.gui_scale, 1);
+    }
+
+    #[test]
+    fn a_gui_scale_too_large_for_the_window_draws_smaller_until_it_fits_again() {
+        // The iOS keyboard takes half of a 1920x1080 window, then goes. Meanwhile the GUI draws
+        // at the largest scale that fits (Window.calculateScale); the option stays 4.
+        let drawn = [[1920, 1080], [1920, 540], [1920, 1080]]
+            .map(|window| crate::hud::gui_scale(window, 4));
+        assert_eq!(drawn, [4, 2, 4]);
     }
 
     #[test]

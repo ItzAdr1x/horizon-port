@@ -584,18 +584,23 @@ pub struct EndPortalFill {
 pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
     u32::from(a) << 24 | u32::from(b) << 16 | u32::from(g) << 8 | u32::from(r)
 }
+/// Window.calculateScale: the largest scale keeping >= 320x240 GUI pixels,
+/// capped by the GUI Scale option (0 = auto). The option keeps its value in a
+/// window too small for it.
+pub fn gui_scale(window: [u32; 2], option: u32) -> u32 {
+    let mut scale = 1;
+    while (option == 0 || scale < option)
+        && window[0] / (scale + 1) >= 320
+        && window[1] / (scale + 1) >= 240
+    {
+        scale += 1;
+    }
+    scale
+}
 impl HudBatch {
-    /// Window.calculateScale: the largest scale keeping >= 320x240 GUI pixels,
-    /// capped by the GUI Scale option (0 = auto).
+    /// A frame at the GUI scale `GUI_SCALE` gives this window.
     pub fn new(window: [u32; 2]) -> Self {
-        let limit = GUI_SCALE.load(std::sync::atomic::Ordering::Relaxed);
-        let mut scale = 1;
-        while (limit == 0 || scale < limit)
-            && window[0] / (scale + 1) >= 320
-            && window[1] / (scale + 1) >= 240
-        {
-            scale += 1;
-        }
+        let scale = gui_scale(window, GUI_SCALE.load(std::sync::atomic::Ordering::Relaxed));
         Self {
             vertices: Vec::new(),
             scale: scale as f32,
