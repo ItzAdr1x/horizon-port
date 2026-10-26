@@ -150,6 +150,7 @@ impl Game<'_> {
                     "gui_size": size,
                     "frame": widgets::generation(),
                     "widgets": widgets,
+                    "touch": self.touch_functions_value(),
                 })))
             }
             "click" => {

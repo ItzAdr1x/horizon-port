@@ -5,7 +5,7 @@ use super::{Game, Screen};
 use horizon_client::{
     Result,
     command::args::GameMode,
-    debug_keys::{CrashNotice, DebugAction, DebugHost, KeyAction, OpenScreen},
+    debug_keys::{CrashNotice, DebugAction, DebugHost, DebugKeys, KeyAction, OpenScreen},
     debug_overlay,
     gizmos::Gizmos,
     hud::HudBatch,
@@ -160,6 +160,13 @@ impl Game<'_> {
         } else {
             modifier_was_down
         }
+    }
+    /// A touch control's F3, alone or with one combination's key, pressed and released whole
+    /// (`DebugKeys::tap`). The keyboard's debug keys are untouched, and on F3+F4 the switcher
+    /// stays open for a finger to pick a mode: there is no F3 to let go.
+    pub(super) fn touch_debug(&mut self, combination: Option<DebugAction>) {
+        let now = self.debug_millis();
+        DebugKeys::tap(&mut Host { game: self }, combination, now);
     }
     /// `Util.getMillis` (positive: KeyboardHandler treats 0 as unset).
     pub(super) fn debug_millis(&self) -> i64 {

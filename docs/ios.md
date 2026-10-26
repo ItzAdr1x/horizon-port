@@ -141,6 +141,9 @@ once a finger first touches the screen.
 | ••• beside the hotbar | The inventory |
 | II (top right) | Pause |
 | Speech bubble (left of II) | Opens chat |
+| F5 and F3 (top left) | The keyboard's keys, one tap each: F5 changes the camera (first person, from behind, from the front), F3 shows or hides the debug screen |
+| Fn (beside F3) | A panel of the other keys, each tile naming what it does: F1 hides the HUD (the touch controls stay, and the hidden hotbar takes no taps), F2 takes a screenshot without the touch controls (in the game folder's `screenshots`), F3+B hitboxes, F3+G chunk borders, F3+H advanced tooltips, F3+F4 the game mode switcher. A tile acts once and closes the panel; Back or a tap beside the panel closes it. No key stays down, so F3 never sticks |
+| Game mode switcher (F3+F4) | Tap a mode to switch to it; Back leaves the mode as it was |
 
 Options > Horizon Settings > Controller Settings > **Touch Movement** swaps the D-pad for a
 joystick that appears where the left thumb lands and sprints pushed all the way forward. Controls'

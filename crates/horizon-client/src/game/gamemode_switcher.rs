@@ -1,7 +1,7 @@
 //! The non-pausing F3+F4 screen (`GameModeSwitcherScreen`).
 use super::{Game, ItemStack, Screen};
 use horizon_client::{
-    game_mode_switcher::{GameModeSwitcher, ICONS, MODES, slot_origin},
+    game_mode_switcher::{GameModeSwitcher, ICONS, MODES, mode_at, slot_origin},
     hud::HudBatch,
     keybinds,
     text::Text,
@@ -30,6 +30,22 @@ impl Game<'_> {
         {
             self.change_game_mode(mode);
         }
+    }
+
+    /// A finger lifted on the switcher: the mode under it applies, as F3's release applies the
+    /// chosen one. Anywhere else it does nothing; Back leaves without a change.
+    pub(super) fn touch_choose_mode(&mut self) {
+        let Some(batch) = self.gui_scale() else {
+            return;
+        };
+        let cursor = (self.cursor.0 as i32, self.cursor.1 as i32);
+        let Some(mode) = mode_at(batch.width as i32, batch.height as i32, cursor) else {
+            return;
+        };
+        if let Some(switcher) = &mut self.gamemode_switcher {
+            switcher.selected = mode;
+        }
+        self.close_gamemode_switcher(true);
     }
 
     pub(super) fn draw_gamemode_switcher(&mut self, batch: &mut HudBatch) {

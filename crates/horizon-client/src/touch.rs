@@ -11,7 +11,9 @@
 //!   the held item, and a finger held still mines, or eats and draws a bow when the held item is
 //!   used over time;
 //! - the hotbar selects its slots, the button beside it opens the inventory, and the one in the
-//!   top corner pauses.
+//!   top corner pauses;
+//! - key caps in the other top corner press F5 and F3, and Fn opens a panel of the other F-keys
+//!   (`functions`).
 //!
 //! Nothing is drawn until a finger first touches the screen. This module is the state machine;
 //! `layout` places the controls, `draw` draws them, and the game applies the `Input`s.
@@ -19,9 +21,11 @@
 use std::time::{Duration, Instant};
 
 mod draw;
+mod functions;
 mod keys;
 mod layout;
 mod menu;
+pub use functions::{Function, Shown};
 use keys::Keys;
 pub use layout::{Button, Cell, Layout};
 pub use menu::{Here, MouseButton, SlotKind, SlotSpot, Spot};
@@ -108,6 +112,8 @@ pub struct Context {
     pub held_item_used_over_time: bool,
     /// An inventory is open: the Shift button is there.
     pub slots: bool,
+    /// The HUD is drawn (F1 hides it): the hotbar's slots answer taps.
+    pub hud_visible: bool,
 }
 
 /// What a touch does to the game. On the title screen and in menus, only what a desk's mouse
@@ -149,6 +155,8 @@ pub enum Input {
     Hotbar(u8),
     /// What Escape does: pause, or leave a menu.
     Back,
+    /// A key cap or a tile of the Fn panel tapped: its keys pressed and released whole.
+    Function(Function),
 }
 
 /// What a finger does, decided where it lands.
@@ -173,6 +181,8 @@ enum Role {
         holding: Option<&'static str>,
     },
     Button(Button),
+    /// On a key cap or a tile of the Fn panel: a tap if it lifts there.
+    Function(&'static functions::Control),
     /// The D-pad's middle while flying: down.
     Descend,
     Hotbar,
@@ -214,6 +224,8 @@ pub struct Touch {
     /// A finger has touched the screen: the controls are drawn from then on.
     seen: bool,
     menus: menu::Menus,
+    /// The Fn panel is open over play.
+    panel: bool,
 }
 
 impl Touch {
@@ -283,6 +295,9 @@ impl Touch {
                 let finger = self.fingers.remove(i);
                 match finger.role {
                     Role::Menu(gesture) => self.lift_menu(gesture, at, here, &mut out),
+                    Role::Function(control) => {
+                        self.lift_function(layout, control, at, now, &mut out)
+                    }
                     role => self.lift(role, now, &mut out),
                 }
             }
@@ -323,18 +338,31 @@ impl Touch {
         out
     }
 
-    /// What the game shows now. Another mode or scene ends what every finger was doing: it does
-    /// nothing more until it lifts, a button it held down comes up clicking nothing, and Shift
-    /// lets go.
+    /// What the game shows now. Another mode or scene closes the Fn panel and ends what every
+    /// finger was doing; the HUD hidden or shown ends a finger on the hotbar.
     fn follow(&mut self, context: Context, now: Instant, out: &mut Vec<Input>) {
         let changed = (context.mode, context.scene) != (self.context.mode, self.context.scene);
         if !context.slots {
             self.menus.shift.latch = menu::Latch::Off;
         }
+        if context.hud_visible != self.context.hud_visible {
+            for finger in &mut self.fingers {
+                if matches!(finger.role, Role::Hotbar) {
+                    finger.role = Role::Spent;
+                }
+            }
+        }
         self.context = context;
         if !changed {
             return;
         }
+        self.panel = false;
+        self.spend_fingers(now, out);
+    }
+
+    /// Every finger does nothing more until it lifts: a button it held down comes up clicking
+    /// nothing, and Shift lets go.
+    fn spend_fingers(&mut self, now: Instant, out: &mut Vec<Input>) {
         for i in 0..self.fingers.len() {
             let role = std::mem::replace(&mut self.fingers[i].role, Role::Spent);
             match role {
@@ -354,6 +382,9 @@ impl Touch {
 
     fn land(&mut self, layout: &Layout, at: [f64; 2], now: Instant, out: &mut Vec<Input>) -> Role {
         let px = [at[0] as f32, at[1] as f32];
+        if let Some(role) = self.land_function(layout, px, now, out) {
+            return role;
+        }
         for button in [Button::Jump, Button::Inventory, Button::Pause, Button::Chat] {
             if layout.on(button, px) {
                 let role = Role::Button(button);
@@ -364,7 +395,9 @@ impl Touch {
                 return role;
             }
         }
-        if let Some(slot) = layout.hotbar_slot(px) {
+        if self.context.hud_visible
+            && let Some(slot) = layout.hotbar_slot(px)
+        {
             out.push(Input::Hotbar(slot));
             return Role::Hotbar;
         }
@@ -471,7 +504,7 @@ impl Touch {
                 }
             }
             Role::Hotbar => out.extend(layout.hotbar_slot(px).map(Input::Hotbar)),
-            Role::Menu(_) | Role::Button(_) | Role::Descend | Role::Spent => {}
+            Role::Menu(_) | Role::Button(_) | Role::Function(_) | Role::Descend | Role::Spent => {}
         }
     }
 
@@ -570,6 +603,7 @@ mod tests {
         let context = Context {
             mode: Mode::Playing,
             movement,
+            hud_visible: true,
             ..Context::default()
         };
         assert!(touch.frame(context, now).is_empty());
@@ -939,6 +973,34 @@ mod tests {
         assert_eq!(
             touch.finger(&layout, 1, Phase::Move, slot(8.0), now),
             [Input::Hotbar(8)]
+        );
+    }
+
+    #[test]
+    fn the_hidden_hotbar_answers_no_taps_and_hiding_it_ends_a_finger_on_it() {
+        let (mut touch, layout, now) = playing(Movement::DPad);
+        let slot = |i: f64| [(171.0 + 1.0 + 20.0 * i + 10.0) * 5.0, 230.0 * 5.0];
+        touch.finger(&layout, 1, Phase::Start, slot(0.0), now);
+        let hidden = Context {
+            hud_visible: false,
+            ..touch.context
+        };
+        assert!(touch.frame(hidden, now).is_empty());
+        assert!(
+            touch
+                .finger(&layout, 1, Phase::Move, slot(4.0), now)
+                .is_empty()
+        );
+        touch.finger(&layout, 1, Phase::End, slot(4.0), now);
+        // A tap where the hotbar was is a tap on the view.
+        assert!(
+            touch
+                .finger(&layout, 2, Phase::Start, slot(2.0), now)
+                .is_empty()
+        );
+        assert_eq!(
+            touch.finger(&layout, 2, Phase::End, slot(2.0), now),
+            [Input::Tap]
         );
     }
 

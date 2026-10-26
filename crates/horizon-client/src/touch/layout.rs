@@ -1,6 +1,7 @@
 //! Where the touch controls are, in physical pixels: Pocket Edition's layout, sized in points so
 //! a button is as big under the thumb on an iPhone as on an iPad.
 
+use super::functions::Place;
 use crate::hud::HudBatch;
 
 /// x, y, width, height in physical pixels.
@@ -22,6 +23,15 @@ pub(super) const REACH: f32 = 22.0;
 pub(super) const KNOB: f32 = 14.0;
 /// The joystick's share of the screen, from the left edge.
 const STICK_SHARE: f32 = 0.4;
+/// A key cap's least side in GUI pixels, which its keys are written in: two of the game font's
+/// characters and a margin.
+const CAP_TEXT: f32 = 16.0;
+/// The Fn panel's tiles, in GUI pixels: two lines of the game font, as wide as its longest label.
+const TILE: [f32; 2] = [100.0, 26.0];
+const TILE_GAP: f32 = 4.0;
+const PANEL_PADDING: f32 = 6.0;
+const PANEL_COLUMNS: u8 = 2;
+const PANEL_ROWS: u8 = 3;
 
 /// A square of the D-pad: its arrows, the forward diagonals that show while forward is held,
 /// and the middle (sneak, or down while flying).
@@ -210,6 +220,42 @@ impl Layout {
     pub(super) fn on(&self, button: Button, at: [f32; 2]) -> bool {
         contains(self.button(button), at)
     }
+    /// A key cap in a row along the top-left corner, or a tile of the panel.
+    pub(super) fn control(&self, place: Place) -> Rect {
+        match place {
+            Place::Cap(i) => {
+                let side = self.u(CELL).max(CAP_TEXT * self.gui);
+                let x = self.u(MARGIN) + f32::from(i) * (side + self.u(2.0));
+                [x, self.u(MARGIN), side, side]
+            }
+            Place::Tile(i) => {
+                let [x, y, ..] = self.panel();
+                let (col, row) = (f32::from(i % PANEL_COLUMNS), f32::from(i / PANEL_COLUMNS));
+                let [w, h] = TILE;
+                [
+                    x + (PANEL_PADDING + col * (w + TILE_GAP)) * self.gui,
+                    y + (PANEL_PADDING + row * (h + TILE_GAP)) * self.gui,
+                    w * self.gui,
+                    h * self.gui,
+                ]
+            }
+        }
+    }
+    /// The Fn panel, in the middle of the screen on whole GUI pixels.
+    pub(super) fn panel(&self) -> Rect {
+        let span = |n: u8, tile: f32| {
+            let n = f32::from(n);
+            n * tile + (n - 1.0) * TILE_GAP + 2.0 * PANEL_PADDING
+        };
+        let (w, h) = (span(PANEL_COLUMNS, TILE[0]), span(PANEL_ROWS, TILE[1]));
+        let x = ((self.size[0] / self.gui - w) / 2.0).floor();
+        let y = ((self.size[1] / self.gui - h) / 2.0).floor();
+        [x * self.gui, y * self.gui, w * self.gui, h * self.gui]
+    }
+    /// The whole screen.
+    pub(super) fn screen(&self) -> Rect {
+        [0.0, 0.0, self.size[0], self.size[1]]
+    }
     /// The joystick's side of the screen, and where it rests: the D-pad's middle.
     pub(super) fn stick_zone(&self, at: [f32; 2]) -> bool {
         at[0] < self.size[0] * STICK_SHARE
@@ -244,6 +290,7 @@ pub(super) fn contains(r: Rect, at: [f32; 2]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::functions::CONTROLS;
     use super::*;
 
     /// Phones and tablets in landscape, with their pixels per point: an iPhone SE, an iPhone,
@@ -273,6 +320,12 @@ mod tests {
                 ("pause", layout.button(Button::Pause)),
                 ("chat", layout.button(Button::Chat)),
             ];
+            rects.extend(
+                CONTROLS
+                    .iter()
+                    .filter(|c| matches!(c.place, Place::Cap(_)))
+                    .map(|c| (c.keys, layout.control(c.place))),
+            );
             let slack = layout.gui;
             for (name, r) in &rects {
                 assert!(
@@ -286,6 +339,40 @@ mod tests {
             while let Some((a, ra)) = rects.pop() {
                 for (b, rb) in &rects {
                     assert!(!overlap(ra, *rb), "{w}x{h}: the {a} and the {b} overlap");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_fn_panel_fits_every_screen_clear_of_back_with_its_tiles_apart() {
+        for (w, h, scale) in SCREENS {
+            let layout = Layout::new(w, h, scale);
+            let panel = layout.panel();
+            let inside = |r: Rect, of: Rect| {
+                r[0] >= of[0]
+                    && r[1] >= of[1]
+                    && r[0] + r[2] <= of[0] + of[2]
+                    && r[1] + r[3] <= of[1] + of[3]
+            };
+            assert!(
+                inside(panel, layout.screen()),
+                "{w}x{h}: the panel leaves the screen"
+            );
+            assert!(
+                !overlap(panel, layout.button(Button::Back)),
+                "{w}x{h}: the panel on Back"
+            );
+            let mut tiles: Vec<_> = CONTROLS
+                .iter()
+                .filter(|c| matches!(c.place, Place::Tile(_)))
+                .map(|c| (c.keys, layout.control(c.place)))
+                .collect();
+            assert_eq!(tiles.len(), 6);
+            while let Some((a, ra)) = tiles.pop() {
+                assert!(inside(ra, panel), "{w}x{h}: {a} leaves the panel");
+                for (b, rb) in &tiles {
+                    assert!(!overlap(ra, *rb), "{w}x{h}: {a} and {b} overlap");
                 }
             }
         }

@@ -217,6 +217,25 @@ impl DebugKeys {
         }
         did
     }
+    /// A touch control's debug keys, pressed and released whole: F3 alone (`None`), or F3 held
+    /// over the key of one combination. A fresh interpreter with the default keys runs them, so
+    /// nothing stays down after, a keyboard's own state (its held F3) is never touched, and with
+    /// no crash key down the crash countdown cannot start.
+    pub fn tap(host: &mut impl DebugHost, combination: Option<DebugAction>, now: i64) {
+        let binds = KeyBinds::default();
+        let mut keys = DebugKeys::default();
+        let mut edge = |key: &str, action| {
+            keys.key_press(host, &binds, key, action, false, false, now);
+        };
+        let modifier = binds.get("key.debug.modifier");
+        edge(modifier, KeyAction::Press);
+        if let Some((name, _)) = ACTIONS.iter().find(|(_, a)| Some(*a) == combination) {
+            let key = binds.get(name);
+            edge(key, KeyAction::Press);
+            edge(key, KeyAction::Release);
+        }
+        edge(modifier, KeyAction::Release);
+    }
     /// `KeyboardHandler.tick`.
     pub fn tick(&mut self, now: i64) -> Option<CrashNotice> {
         if self.crash_key_time <= 0 {
@@ -457,6 +476,46 @@ mod tests {
         press(&mut k, &mut h, &b, "key.keyboard.f7", 0);
         assert_eq!(h.overlay, 1);
         press(&mut k, &mut h, &b, F3, 1);
+        release(&mut k, &mut h, &b, F3);
+        assert_eq!(h.overlay, 1);
+    }
+
+    #[test]
+    fn a_tap_runs_its_one_action_and_leaves_the_overlay_alone() {
+        for action in [
+            DebugAction::ShowHitboxes,
+            DebugAction::ShowChunkBorders,
+            DebugAction::AdvancedTooltips,
+            DebugAction::SwitchGameMode,
+        ] {
+            let mut h = Host::default();
+            DebugKeys::tap(&mut h, Some(action), 0);
+            assert_eq!(h.actions, [(action, false)], "{action:?}");
+            assert_eq!(h.overlay, 0, "{action:?}");
+        }
+        let mut h = Host::default();
+        DebugKeys::tap(&mut h, None, 0);
+        assert_eq!(h.overlay, 1);
+        assert!(h.actions.is_empty());
+    }
+
+    #[test]
+    fn a_tap_leaves_the_keyboard_and_the_crash_countdown_alone() {
+        let (mut k, mut h, b) = (DebugKeys::default(), Host::default(), KeyBinds::default());
+        // The keyboard holds F3 while a finger taps F3+B, then F3+C (C is the crash key too).
+        press(&mut k, &mut h, &b, F3, 0);
+        DebugKeys::tap(&mut h, Some(DebugAction::ShowHitboxes), 1);
+        DebugKeys::tap(&mut h, Some(DebugAction::CopyLocation), 2);
+        assert_eq!(
+            h.actions,
+            [
+                (DebugAction::ShowHitboxes, false),
+                (DebugAction::CopyLocation, false)
+            ]
+        );
+        assert!(k.modifier_down);
+        assert_eq!(k.tick(20_000), None);
+        // The keyboard's F3 was never used as a modifier: its release toggles the overlay.
         release(&mut k, &mut h, &b, F3);
         assert_eq!(h.overlay, 1);
     }

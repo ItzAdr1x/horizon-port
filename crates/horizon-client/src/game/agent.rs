@@ -514,6 +514,10 @@ impl Game<'_> {
             // Mouse movement turns the camera (`apply_mouse_look`): the real
             // pointer is grabbed, or an agent's `mouse-move` stands in for it.
             "pointer_grabbed": self.captured || self.agent_pointer,
+            // F5's perspective, F1's hidden HUD and F3's debug screen.
+            "camera": self.camera_type.name(),
+            "hide_gui": self.ui.hide_gui,
+            "debug": self.debug,
             "player": player,
             "selected": self.selected + 1,
             "held": self.held().map(|s| self.stack_value(s)),
