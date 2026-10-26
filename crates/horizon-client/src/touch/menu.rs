@@ -379,9 +379,9 @@ impl Touch {
         out.push(Input::Pointer(at));
     }
 
-    /// Whether a click on where a finger landed is shifted, as the Shift button stands.
-    fn shift_for(&mut self, landed: &Here) -> bool {
-        self.menus.shift.take(!trash(landed))
+    /// Whether a click on `here` is shifted, as the Shift button stands.
+    fn shift_for(&mut self, here: &Here) -> bool {
+        self.menus.shift.take(!trash(here))
     }
 
     /// A menu finger lifts at `at`, over `here`.
@@ -405,15 +405,15 @@ impl Touch {
         match gesture {
             // Fingers miss on a big screen, and a stack thrown into the world can't be taken
             // back: throwing is a drag beyond the panel, never a tap.
-            Gesture::Pending { here: landed, .. }
-                if landed.carrying && landed.spot == Spot::Outside => {}
-            // Two taps on one slot reach the game as two clicks at their own lifts, so its double
-            // click (PICKUP_ALL) is the game's to decide, on its own clock.
-            Gesture::Pending { here: landed, .. } => {
-                let shifted = self.shift_for(&landed);
+            Gesture::Pending { .. } if here.carrying && here.spot == Spot::Outside => {}
+            // A tap clicks where it lifts. Two taps on one slot reach the game as two clicks at
+            // their own lifts, so its double click (PICKUP_ALL) is the game's to decide, on its
+            // own clock.
+            Gesture::Pending { .. } => {
+                let shifted = self.shift_for(&here);
                 press_down(out, MouseButton::Left, shifted, false);
                 release(out, MouseButton::Left, shifted);
-                if landed.spot == Spot::Field {
+                if here.spot == Spot::Field {
                     out.push(Input::Keyboard);
                 }
             }

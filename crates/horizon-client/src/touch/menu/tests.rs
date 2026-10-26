@@ -379,6 +379,47 @@ fn a_tap_outside_with_a_stack_in_hand_throws_nothing() {
 }
 
 #[test]
+fn a_tap_clicks_beyond_the_panel_by_where_it_lifts() {
+    let (mut touch, layout, now) = menu();
+    let near = [A[0] + 10.0, A[1]];
+    let (inside, outside) = (carrying(Here::default()), carrying(spot(Spot::Outside)));
+    touch.on(&layout, event(1, Phase::Start, A, inside), now);
+    touch.on(&layout, event(1, Phase::Move, near, outside), now);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, near, outside), now),
+        [Input::Pointer(near), Input::Pointer(AWAY)]
+    );
+    // Landed beyond the panel and lifted inside it, it clicks inside.
+    touch.on(&layout, event(2, Phase::Start, A, outside), now);
+    touch.on(&layout, event(2, Phase::Move, near, inside), now);
+    assert!(
+        touch
+            .on(&layout, event(2, Phase::End, near, inside), now)
+            .contains(&press(false))
+    );
+}
+
+#[test]
+fn a_tap_that_lifts_on_the_trash_is_not_shifted_by_the_latch() {
+    let (mut touch, layout, now) = inventory();
+    tap_shift(&mut touch, &layout, now);
+    let trash = slot_of(TRASH_ID, false, SlotKind::Trash);
+    let near = [A[0] + 10.0, A[1]];
+    touch.on(&layout, event(1, Phase::Start, A, Here::default()), now);
+    touch.on(&layout, event(1, Phase::Move, near, trash), now);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, near, trash), now),
+        [
+            Input::Pointer(near),
+            press(false),
+            Input::Release(LEFT),
+            Input::Pointer(AWAY)
+        ]
+    );
+    assert!(tap_shifted(&mut touch, &layout, 2, slot(3), now));
+}
+
+#[test]
 fn a_tap_on_a_field_asks_for_the_keyboard() {
     let (mut touch, layout, now) = menu();
     touch.on(&layout, event(1, Phase::Start, A, spot(Spot::Field)), now);
