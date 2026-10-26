@@ -336,6 +336,22 @@ fn a_crafted_stack_dropped_on_a_gap_stays_in_hand() {
 }
 
 #[test]
+fn a_stack_lifted_over_a_result_is_not_put_down_there_but_goes_back() {
+    for filled in [false, true] {
+        let (_, lifted) = drag_and_lift(slot(3), slot_of(200, filled, SlotKind::Result));
+        assert_eq!(
+            lifted,
+            [
+                Input::Pointer(B),
+                Input::Release(LEFT),
+                Input::PutDown(A),
+                Input::Pointer(AWAY)
+            ]
+        );
+    }
+}
+
+#[test]
 fn a_creative_copy_is_dragged_as_the_mouse_drags_it() {
     let copy = slot_of(901, true, SlotKind::Display);
     let (_, lifted) = drag_and_lift(copy, empty(4));

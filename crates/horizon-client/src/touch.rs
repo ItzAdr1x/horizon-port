@@ -131,9 +131,8 @@ pub enum Input {
     Wheel(f32),
     /// Shift goes down or up, as the physical key a keyboard's Shift is (`has_shift_down`).
     Shift(bool),
-    /// If the hand holds a stack now, a left click at this point (physical pixels), unless a
-    /// result slot is there, where the click would take another craft: a dragged stack put down,
-    /// or what that leaves in hand put back where it came from.
+    /// If the hand holds a stack now, a left click at this point (physical pixels): a dragged
+    /// stack put down, or what that leaves in hand put back where it came from. Never a result.
     PutDown([f64; 2]),
     /// A tap focused a text field: the system keyboard is wanted.
     Keyboard,

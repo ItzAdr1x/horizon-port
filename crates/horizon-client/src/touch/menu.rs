@@ -423,14 +423,17 @@ impl Touch {
             } => {
                 out.push(Input::Release(MouseButton::Left));
                 // The stack put down where the finger lifts, and whatever that leaves in hand put
-                // back where it came from (a stack it was swapped with, a remainder). A crafted
-                // stack goes back nowhere: a click on the result would craft again.
+                // back where it came from (a stack it was swapped with, a remainder). Nothing is
+                // put down on a result: a click there would craft again, so a crafted stack goes
+                // back nowhere, and one lifted over a result stays in hand or goes back.
                 let back = origin.kind == SlotKind::Normal;
                 match here.spot {
                     Spot::Slot(b) if b.id == origin.id => {}
                     Spot::Outside => click(out, MouseButton::Left, true),
-                    Spot::Slot(_) => {
-                        out.push(Input::PutDown(at));
+                    Spot::Slot(b) => {
+                        if b.kind != SlotKind::Result {
+                            out.push(Input::PutDown(at));
+                        }
                         if back {
                             out.push(Input::PutDown(from));
                         }

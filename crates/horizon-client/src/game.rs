@@ -6395,7 +6395,7 @@ impl Game<'_> {
         self.click_inventory(right);
     }
     /// A touch drag's stack put down at `at` (physical pixels): a left click there while the
-    /// hand holds a stack, but never on a result, where the click would take another craft.
+    /// hand holds a stack.
     pub(super) fn inventory_put_down(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -6403,15 +6403,7 @@ impl Game<'_> {
         device_id: DeviceId,
         at: [f64; 2],
     ) {
-        let Some(batch) = self.gui_scale() else {
-            return;
-        };
-        let (x, y) = (at[0] as f32 / batch.scale, at[1] as f32 / batch.scale);
-        if self.carried.is_none()
-            || self
-                .slot_at(&batch, x, y)
-                .is_some_and(|i| self.output_slot(i))
-        {
+        if self.carried.is_none() {
             return;
         }
         self.inv.last_click = None;
