@@ -540,12 +540,7 @@ impl Game<'_> {
         };
         match key {
             KeyCode::Escape => return self.close_command_block(),
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                if let Some(s) = self.command_block_screen.take() {
-                    self.set_command_block(&s);
-                }
-                return self.close_command_block();
-            }
+            KeyCode::Enter | KeyCode::NumpadEnter => return self.command_block_done(),
             _ => {}
         }
         let ctrl = self.keys.contains(&KeyCode::ControlLeft);
@@ -558,6 +553,18 @@ impl Game<'_> {
             s.command.shortcut(shortcut, &mut self.clipboard);
         } else if !s.command.key(key, ctrl, shift) && !ctrl {
             self.command_block_type(event.text.as_deref().unwrap_or(""));
+        }
+    }
+    /// Done: the command is set and the screen closes.
+    pub(super) fn command_block_done(&mut self) {
+        if let Some(s) = self.command_block_screen.take() {
+            self.set_command_block(&s);
+        }
+        self.close_command_block();
+    }
+    pub(super) fn command_block_backspace(&mut self) {
+        if let Some(s) = self.command_block_screen.as_mut() {
+            s.command.key(KeyCode::Backspace, false, false);
         }
     }
     /// Characters typed into the command box (`StringUtil.isAllowedChatCharacter`).

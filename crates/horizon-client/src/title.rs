@@ -1367,6 +1367,16 @@ impl Title {
             mode => caret_field(mode, self.search_focused, &mut self.search),
         }
     }
+    /// A text field has the focus: typed text goes to it.
+    pub fn typing(&self) -> bool {
+        match &self.mode {
+            Mode::Select { .. } => self.search_focused,
+            Mode::Edit { focused, .. } => *focused,
+            Mode::Create { focus, .. } => *focus < 2,
+            Mode::Multiplayer(screen) => screen.typing(),
+            _ => false,
+        }
+    }
     /// Whether the focused field edits at its cursor (every field but the
     /// server screens', which still append).
     pub fn has_caret_field(&mut self) -> bool {

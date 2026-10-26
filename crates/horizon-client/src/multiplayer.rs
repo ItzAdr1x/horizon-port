@@ -1261,6 +1261,13 @@ impl Screen {
             scroll.release();
         }
     }
+    /// A text field has the focus: the server's name or address, or a friend's code or relay.
+    pub fn typing(&self) -> bool {
+        matches!(
+            self,
+            Self::Edit { .. } | Self::Direct { .. } | Self::Friend { .. }
+        )
+    }
     fn focused_field(&mut self) -> Option<&mut String> {
         match self {
             Self::Edit {

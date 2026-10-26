@@ -849,18 +849,6 @@ impl Game<'_> {
 
     // ---- text fields ----
 
-    /// A text field has keyboard focus: chat, a sign, a book being written,
-    /// a search box, the anvil's name, the title screens' and the options'
-    /// fields, the LAN port.
-    fn pad_typing(&self) -> bool {
-        (self.screen == Screen::Chat && self.title.is_none())
-            || self.sign_edit.is_some()
-            || matches!(self.book, Some(super::books::BookScreen::Edit { .. }))
-            || (self.screen == Screen::Creative && self.creative_screen.tab().search)
-            || self.recipe_search_focused()
-            || self.station_typing()
-    }
-
     /// Open the on-screen keyboard over the focused field: Horizon's, or
     /// Steam's on a Steam Deck (`steam://open/keyboard`, which types into
     /// the window like a real keyboard).
@@ -899,71 +887,15 @@ impl Game<'_> {
     /// What a key of the on-screen keyboard does: the same as a typed key in
     /// the field that has focus.
     fn pad_osk_output(&mut self, out: osk::Output) {
-        use osk::Output;
-        let (key, text) = match &out {
-            Output::Text(t) => (None, Some(t.as_str())),
-            Output::Backspace => (Some(KeyCode::Backspace), None),
-            Output::Enter => (Some(KeyCode::Enter), None),
-            Output::Close => {
-                self.pad.menu.osk = None;
-                self.pad.menu.osk_dismissed = true;
-                return;
-            }
-        };
-        let backspace = key == Some(KeyCode::Backspace);
-        if self.screen == Screen::Chat && self.title.is_none() {
-            match text {
-                Some(t) => self.chat_type(t),
-                None => self.chat_key_code(key.expect("a key"), None),
-            }
-        } else if self.sign_edit.is_some() {
-            self.sign_input(key, text);
-        } else if self.book.is_some() {
-            self.book_input(key, text);
-        } else if self.screen == Screen::Creative && self.creative_screen.tab().search {
-            if key != Some(KeyCode::Enter) {
-                self.creative_search_edit(text, backspace);
-            }
-        } else if self.recipe_search_focused() {
-            if key != Some(KeyCode::Enter) {
-                self.recipe_text(text, backspace);
-            }
-        } else if self.station_typing() {
-            if key != Some(KeyCode::Enter) {
-                self.station_text(text, backspace);
-            }
-        } else if self.screen == Screen::WorldOptions {
-            if key != Some(KeyCode::Enter) {
-                self.world_options_text(text);
-            }
-        } else if self.screen == Screen::Options {
-            let result = match text {
-                Some(t) => {
-                    self.ui.options.type_text(&self.gui.atlas, t);
-                    Ok(())
-                }
-                None => self.options_key(key.expect("a key"), None),
-            };
-            if let Err(e) = result {
-                log::warn!("Horizon: on-screen keyboard: {e}");
-            }
-        } else if self.title.is_some() {
-            match key {
-                Some(KeyCode::Enter) => {
-                    if let Some(t) = self.title.as_mut() {
-                        t.confirm_edit();
-                    }
-                }
-                Some(KeyCode::Backspace) => self.title_edit(None, true),
-                _ => self.title_edit(text, false),
-            }
+        if out == osk::Output::Close {
+            self.pad.menu.osk = None;
+            self.pad.menu.osk_dismissed = true;
+            return;
         }
+        let enter = out == osk::Output::Enter;
+        self.type_into_field(out);
         // Enter ends the typing; a field that closed with it closes the keyboard.
-        if key == Some(KeyCode::Enter)
-            || (!self.pad_typing()
-                && self.title.is_none()
-                && !matches!(self.screen, Screen::Options | Screen::WorldOptions))
-        {
+        if enter || self.typing_field().is_none() {
             self.pad.menu.osk = None;
         }
     }

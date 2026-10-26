@@ -824,3 +824,36 @@ fn world_fields_edit_at_their_cursor() {
     f.title.field_key(KeyCode::Backspace, false, false);
     assert_eq!(f.title.search, "world");
 }
+
+#[test]
+fn typing_is_true_exactly_when_typed_text_has_a_field() {
+    let mut f = Fixture::new();
+    f.world("World", "World");
+    let mut seen = Vec::new();
+    let mut check = |title: &mut Title| {
+        assert_eq!(title.typing(), title.focused_field().is_some());
+        seen.push(title.typing());
+    };
+    check(&mut f.title);
+    // The world list opens with its search box focused (setInitialFocus).
+    f.title.enter_singleplayer();
+    check(&mut f.title);
+    for focus in 0..3 {
+        f.title.mode = Title::new_world();
+        if let Mode::Create { focus: field, .. } = &mut f.title.mode {
+            *field = focus;
+        }
+        check(&mut f.title);
+    }
+    for screen in [
+        crate::multiplayer::Screen::Direct {
+            address: String::new(),
+        },
+        crate::multiplayer::Screen::friend(),
+    ] {
+        f.title.mode = Mode::Multiplayer(screen);
+        check(&mut f.title);
+    }
+    // The main menu; the search; the name, the seed, then neither; the address; the code.
+    assert_eq!(seen, [false, true, true, true, false, true, true]);
+}

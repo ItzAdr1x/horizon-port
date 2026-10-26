@@ -13,6 +13,7 @@ use horizon_client::{
         Species,
         render::{PROFESSIONS, VILLAGER_TYPES},
     },
+    osk::Output as Edit,
     widgets,
 };
 use horizon_core::geometry::Vec3;
@@ -1561,10 +1562,13 @@ impl Game<'_> {
                         title.backspace();
                     }
                 }
-                if text == "\\b" {
-                    title.backspace();
+                let edit = if text == "\\b" {
+                    Edit::Backspace
                 } else {
-                    title.type_text(text);
+                    Edit::Text(text.to_owned())
+                };
+                if !self.type_into_field(edit) {
+                    return Err("type needs a text field with the focus (--field name|seed)".into());
                 }
                 ok(json!({ "ok": true, "menu": self.title_value() }))
             }

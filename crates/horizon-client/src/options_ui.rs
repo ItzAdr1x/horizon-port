@@ -2641,6 +2641,17 @@ impl OptionsUi {
         }
         events
     }
+    /// A search box takes typed text: the pack screen's, the language list's or the settings'.
+    pub fn typing(&self) -> bool {
+        self.resource_error.is_none()
+            && self.selected_key.is_none()
+            && self.selected_pad_action.is_none()
+            && match self.page() {
+                Page::Packs => self.pack_screen.is_some(),
+                Page::Language => true,
+                _ => self.settings_search_active(),
+            }
+    }
     /// Typed text (the language search box).
     pub fn type_text(&mut self, atlas: &HudAtlas, text: &str) {
         if self.resource_error.is_some() {

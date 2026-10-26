@@ -1,6 +1,6 @@
 //! Commands from the control socket (`horizon-ctl`), run on the game thread.
-use super::{Game, Screen};
-use horizon_client::{Result, items::ItemStack};
+use super::{Game, Screen, typing::Field};
+use horizon_client::{Result, items::ItemStack, osk::Output as Edit};
 use horizon_core::geometry::Vec3;
 use serde_json::{Value, json};
 use std::{
@@ -539,41 +539,17 @@ impl Game<'_> {
                     .unwrap_or("")
                     .strip_prefix(' ')
                     .unwrap_or("");
-                if self.book.is_some() {
-                    self.book_type(text);
-                    return ok();
-                }
-                if self.sign_edit.is_some() {
-                    self.sign_input(None, Some(text));
-                    return ok();
-                }
-                match self.screen {
-                    Screen::Chat => self.chat_type(text),
-                    Screen::CommandBlock => self.command_block_type(text),
-                    Screen::Options => self.ui.options.type_text(&self.gui.atlas, text),
-                    // The port, or the game rules' search and number boxes.
-                    Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
-                    Screen::WorldOptions => self.world_options_text(Some(text)),
-                    Screen::Inventory if self.recipe_search_focused() => {
-                        self.recipe_text(Some(text), false)
+                let field = self.typing_field().ok_or(
+                    "type needs a text field with the focus: the chat (key t tap), a sign or book, a search box, the anvil, a command block or World Options",
+                )?;
+                match (field, text) {
+                    (_, "\\b") => {
+                        self.type_into_field(Edit::Backspace);
                     }
-                    // The anvil's rename box.
-                    Screen::Inventory
-                        if self
-                            .station
-                            .as_ref()
-                            .is_some_and(|s| s.kind == super::stations::Kind::Anvil) =>
-                    {
-                        self.station_text(Some(text), false)
-                    }
-                    Screen::Creative if self.creative_screen.tab().search => {
-                        // As typed: replaces a selected query, keeps the length limit.
-                        self.creative_search_edit(Some(text), false)
-                    }
+                    // On a book's page, \n is a line break.
+                    (Field::Book, _) => self.book_type(text),
                     _ => {
-                        return Err(
-                            "type needs the chat screen (key t tap), a sign or book, the language search, the creative search, the anvil or World Options".into(),
-                        );
+                        self.type_into_field(Edit::Text(text.to_owned()));
                     }
                 }
                 ok()

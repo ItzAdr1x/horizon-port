@@ -164,6 +164,7 @@ mod trial_spawner;
 mod trial_visuals;
 mod trident;
 mod tweaks;
+mod typing;
 mod ui_control;
 mod vault;
 mod villagers;
