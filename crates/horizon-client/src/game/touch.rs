@@ -225,6 +225,9 @@ impl Game<'_> {
         };
         let inputs = self.touch.frame(context, Instant::now());
         self.apply_touch(event_loop, id, DeviceId::dummy(), inputs);
+        if let (Some(layout), Some(batch)) = (self.touch_layout(), self.gui_scale()) {
+            horizon_client::ui::set_tooltip_lift(self.touch.tooltip_lift(&layout) / batch.scale);
+        }
     }
 
     fn apply_touch(

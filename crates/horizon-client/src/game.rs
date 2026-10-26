@@ -9406,7 +9406,7 @@ impl Game<'_> {
     fn tooltip(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32) {
         let atlas = &self.gui.atlas;
         let w = HudBatch::text_width(atlas, text);
-        let (x, y) = (x + 12.0, y - 12.0);
+        let (x, y) = (x + 12.0, horizon_client::ui::tooltip_top(y, 8.0));
         batch.fill(atlas, x - 3.0, y - 4.0, w + 6.0, 16.0, rgba(16, 0, 16, 240));
         batch.fill(atlas, x - 3.0, y - 3.0, w + 6.0, 1.0, rgba(80, 0, 255, 80));
         batch.fill(atlas, x - 3.0, y + 10.0, w + 6.0, 1.0, rgba(40, 0, 127, 80));
@@ -13068,6 +13068,11 @@ impl Loading {
             return;
         };
         let mut batch = HudBatch::new(size);
+        if let Some(window) = &self.window {
+            let layout =
+                horizon_client::touch::Layout::new(size[0], size[1], window.scale_factor());
+            horizon_client::ui::set_tooltip_lift(self.touch.tooltip_lift(&layout) / batch.scale);
+        }
         self.draw_menu(&mut batch);
         self.frames += 1;
         horizon_client::widgets::end_frame(self.frames);

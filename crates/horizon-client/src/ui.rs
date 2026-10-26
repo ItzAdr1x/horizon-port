@@ -588,6 +588,25 @@ pub fn scrollbar(
     );
 }
 
+thread_local! {
+    /// GUI pixels between the pointer and a tooltip's bottom while a finger is the pointer; 0 for
+    /// a mouse.
+    static TOOLTIP_LIFT: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
+/// Clear tooltips of a finger this many GUI pixels tall from now on (0: as a mouse has them). The
+/// game sets it once a frame from the touch controls.
+pub fn set_tooltip_lift(gui_px: f32) {
+    TOOLTIP_LIFT.set(gui_px);
+}
+
+/// The top of a tooltip `h` pixels tall for a pointer at height `y`: 12 pixels above the pointer
+/// (`DefaultTooltipPositioner`), or wholly above a finger that is the pointer.
+pub fn tooltip_top(y: f32, h: f32) -> f32 {
+    let lift = TOOLTIP_LIFT.get();
+    if lift > 0.0 { y - lift - h } else { y - 12.0 }
+}
+
 /// Screen tooltip (DefaultTooltipPositioner + TooltipRenderUtil): the
 /// background and frame sprites around the lines, beside the cursor.
 pub fn tooltip(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], cursor: (f32, f32)) {
@@ -604,7 +623,7 @@ pub fn tooltip(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], cursor: (
         10.0 * lines.len() as f32
     };
     let mut x = cursor.0 + 12.0;
-    let mut y = cursor.1 - 12.0;
+    let mut y = tooltip_top(cursor.1, h);
     if x + w > batch.width {
         x = (cursor.0 - 24.0 - w).max(4.0);
     }
@@ -1185,6 +1204,15 @@ impl EditBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tooltips_rise_wholly_above_a_finger() {
+        assert_eq!(tooltip_top(100.0, 30.0), 88.0);
+        set_tooltip_lift(20.0);
+        assert_eq!(tooltip_top(100.0, 30.0), 50.0);
+        set_tooltip_lift(0.0);
+        assert_eq!(tooltip_top(100.0, 30.0), 88.0);
+    }
 
     /// The quads' destination rectangles and their UVs.
     fn quads(batch: &HudBatch) -> Vec<([f32; 4], [f32; 4])> {

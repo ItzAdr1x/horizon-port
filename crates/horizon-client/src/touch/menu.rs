@@ -349,6 +349,17 @@ impl Touch {
         vec![Input::Pointer(AWAY)]
     }
 
+    /// The physical pixels tooltips keep clear above the pointer: a fingertip while a finger is
+    /// on a menu, none for a mouse.
+    pub fn tooltip_lift(&self, layout: &Layout) -> f32 {
+        let pointing = self.fingers.iter().any(|f| matches!(f.role, Role::Menu(_)));
+        if pointing {
+            layout.finger_clearance()
+        } else {
+            0.0
+        }
+    }
+
     /// Where a carried stack is drawn while nothing hovers: where the last finger lifted.
     pub fn rest(&self) -> Option<[f64; 2]> {
         self.menus.rest
@@ -987,5 +998,15 @@ mod tests {
         for plain in [Spot::Plain, Spot::Slider, Spot::Grab, Spot::Field] {
             assert_eq!(hold(&spot(plain)), Hold::Nothing);
         }
+    }
+
+    #[test]
+    fn tooltips_clear_a_finger_only_while_it_rests() {
+        let (mut touch, layout, now) = menu();
+        assert_eq!(touch.tooltip_lift(&layout), 0.0);
+        touch.touch(&layout, event(1, Phase::Start, A, slot(3)), now);
+        assert_eq!(touch.tooltip_lift(&layout), layout.finger_clearance());
+        touch.touch(&layout, event(1, Phase::End, A, slot(3)), now);
+        assert_eq!(touch.tooltip_lift(&layout), 0.0);
     }
 }
