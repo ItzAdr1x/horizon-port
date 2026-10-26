@@ -421,6 +421,20 @@ impl Loading {
         self.save_menu_address();
     }
 
+    /// What the title shows, as an identity (`Game::scene`).
+    pub(super) fn scene(&self) -> u64 {
+        let menu = &self.menu;
+        let options = menu
+            .options_open
+            .then(|| std::mem::discriminant(&menu.options.page()));
+        scene_id((
+            options,
+            menu.title.as_ref().map(title_page),
+            menu.win.is_some(),
+            menu.pending.is_some(),
+        ))
+    }
+
     /// The mouse wheel, `amount` lines after Discrete Scrolling and the wheel sensitivity, over
     /// the title screen or its options.
     pub(super) fn menu_wheel(&mut self, amount: f32) {

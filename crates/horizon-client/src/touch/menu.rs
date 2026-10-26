@@ -486,7 +486,7 @@ impl Touch {
         }
     }
 
-    /// Let go of what a menu finger holds without acting: a cancelled touch, or a screen that
+    /// Let go of what a menu finger holds without acting: a cancelled touch, or a scene that
     /// changed under it. Nothing hovers when the button comes up, and its release clicks nothing.
     pub(super) fn let_go(&mut self, gesture: Gesture, out: &mut Vec<Input>) {
         if let Gesture::Shift = gesture {
@@ -500,25 +500,6 @@ impl Touch {
                 out.push(Input::Shift(false));
             }
         }
-    }
-
-    /// The game's screen changed under the menu fingers while it took their clicks: they do
-    /// nothing more until they lift, and their buttons' releases never reach the new screen.
-    pub fn spend(&mut self) -> Vec<Input> {
-        let mut out = vec![Input::Pointer(AWAY)];
-        for finger in &mut self.fingers {
-            match finger.role {
-                Role::Menu(Gesture::Shift) => {}
-                Role::Menu(gesture) => {
-                    if let Gesture::Pressing { shifted: true, .. } = gesture {
-                        out.push(Input::Shift(false));
-                    }
-                    finger.role = Role::Spent;
-                }
-                _ => {}
-            }
-        }
-        out
     }
 
     /// The physical pixels tooltips keep clear above the pointer: a fingertip while a finger is

@@ -129,9 +129,10 @@ impl Game<'_> {
         } else {
             Here::default()
         };
+        let context = self.touch_context();
         let inputs = self
             .touch
-            .touch(&layout, touch_event(&touch, here), Instant::now());
+            .touch(&layout, context, touch_event(&touch, here), Instant::now());
         self.apply_touch(event_loop, id, touch.device_id, inputs);
     }
 
@@ -206,11 +207,8 @@ impl Game<'_> {
         }
     }
 
-    /// Once a frame, after the pads: what the screen shows, and held fingers.
-    pub(super) fn touch_frame(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(id) = self.window.as_ref().map(|w| w.id()) else {
-            return;
-        };
+    /// What the game shows the touch controls.
+    fn touch_context(&self) -> Context {
         let mode = if self.title.is_some() {
             Mode::Title
         } else if self.pad_in_menu() || self.server_packs.prompt.is_some() {
@@ -218,18 +216,27 @@ impl Game<'_> {
         } else {
             Mode::Playing
         };
-        // A thumb resting on the joystick is play, as a tilted stick is (`poll_pads`).
-        if self.touch.active() {
-            self.last_input = Instant::now();
-        }
-        let context = Context {
+        Context {
             mode,
+            scene: self.scene(),
             movement: self.settings.controller.touch_movement,
             flying: self.player.as_ref().is_some_and(|p| p.flying),
             held_item_used_over_time: self.held_item_used_over_time(),
             slots: self.title.is_none()
                 && matches!(self.screen, Screen::Inventory | Screen::Creative),
+        }
+    }
+
+    /// Once a frame, after the pads: what the screen shows, and held fingers.
+    pub(super) fn touch_frame(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(id) = self.window.as_ref().map(|w| w.id()) else {
+            return;
         };
+        // A thumb resting on the joystick is play, as a tilted stick is (`poll_pads`).
+        if self.touch.active() {
+            self.last_input = Instant::now();
+        }
+        let context = self.touch_context();
         let inputs = self.touch.frame(context, Instant::now());
         self.apply_touch(event_loop, id, DeviceId::dummy(), inputs);
         if let (Some(layout), Some(batch)) = (self.touch_layout(), self.gui_scale()) {
@@ -252,12 +259,16 @@ impl Game<'_> {
         let busy = self.pending_save.is_some()
             || self.world_loader.is_some()
             || self.pending_entry.is_some();
-        // A click that changes the screen ends the batch's clicks: the rest were meant for the
-        // screen it left.
-        let scene = |game: &Self| (game.screen, game.title.is_some());
-        let before = scene(self);
+        // A click that changes the scene ends the batch's clicks: the rest were meant for the
+        // screen it left, and a button still to come up comes up clicking nothing.
+        let before = self.scene();
         let mut changed = false;
         for input in inputs {
+            let input = match input {
+                Input::Release(button) if changed => Input::Abort(button),
+                Input::Press { .. } | Input::PutDown(_) | Input::Wheel(_) if changed => continue,
+                input => input,
+            };
             let clicks = matches!(
                 input,
                 Input::Press { .. }
@@ -266,9 +277,6 @@ impl Game<'_> {
                     | Input::PutDown(_)
                     | Input::Wheel(_)
             );
-            if changed && clicks {
-                continue;
-            }
             let lets_go = matches!(
                 input,
                 Input::Pointer(_)
@@ -335,11 +343,7 @@ impl Game<'_> {
             if let Err(e) = result {
                 log::warn!("Horizon: touch: {e}");
             }
-            changed |= clicks && scene(self) != before;
-        }
-        if changed {
-            let inputs = self.touch.spend();
-            self.apply_touch(event_loop, id, device_id, inputs);
+            changed |= clicks && self.scene() != before;
         }
     }
 
@@ -451,7 +455,12 @@ impl Loading {
             touch.location.y as f32 / scale,
         );
         let event = touch_event(&touch, widget_here(p, scale));
-        let inputs = self.touch.touch(&layout, event, Instant::now());
+        let context = Context {
+            mode: Mode::Title,
+            scene: self.scene(),
+            ..Context::default()
+        };
+        let inputs = self.touch.touch(&layout, context, event, Instant::now());
         for input in inputs {
             if let Input::Wheel(lines) = input {
                 self.menu_wheel(lines);

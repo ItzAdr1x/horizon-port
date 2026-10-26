@@ -245,6 +245,24 @@ use winit::{
     window::{CursorGrabMode, Window, WindowId},
 };
 
+/// A scene's identity (`Game::scene`): its parts, hashed.
+fn scene_id(parts: impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::hash::DefaultHasher::new();
+    parts.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The title screen's page, as scenes tell them apart.
+fn title_page(title: &Title) -> impl std::hash::Hash {
+    use horizon_client::title::Mode;
+    let server_page = match &title.mode {
+        Mode::Multiplayer(screen) => Some(std::mem::discriminant(screen)),
+        _ => None,
+    };
+    (std::mem::discriminant(&title.mode), server_page)
+}
+
 #[derive(Clone)]
 struct Options {
     resources: PathBuf,
@@ -462,7 +480,7 @@ impl Options {
         Ok(Some(o))
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Screen {
     Playing,
     GameModeSwitcher,
@@ -5416,6 +5434,35 @@ impl Game<'_> {
         if self.container.is_none() && self.craft_size == 2 && !self.mount_active() {
             self.draw_inventory_effects(batch, (ox, oy), 176);
         }
+    }
+    /// What the screen shows, as an identity: the screen, the title's or the options' page, and
+    /// the menu or container behind it. Another one is another vanilla `Screen` object: what
+    /// the last one kept between clicks is gone, and fingers on it do nothing more.
+    pub(super) fn scene(&self) -> u64 {
+        use std::mem::discriminant;
+        let options =
+            (self.screen == Screen::Options).then(|| discriminant(&self.ui.options.page()));
+        let menu = (
+            self.container,
+            self.station.as_ref().map(|s| discriminant(&s.kind)),
+            self.remote
+                .as_ref()
+                .and_then(|r| r.menu.as_ref())
+                .map(|m| m.0),
+            self.mount_active(),
+        );
+        let overlays = (
+            self.sign_edit.is_some(),
+            self.book.is_some(),
+            self.server_packs.prompt.is_some(),
+        );
+        scene_id((
+            self.screen,
+            self.title.as_ref().map(title_page),
+            options,
+            menu,
+            overlays,
+        ))
     }
     pub(super) fn close_container(&mut self) {
         self.close_station();

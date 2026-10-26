@@ -94,10 +94,13 @@ impl Movement {
     }
 }
 
-/// What the game tells the controls each frame.
+/// What the game tells the controls each frame, and with each touch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Context {
     pub mode: Mode,
+    /// What the screen shows, as an identity: the screen, its page, the menu behind it. When it
+    /// changes, fingers on the old one do nothing more.
+    pub scene: u64,
     pub movement: Movement,
     /// The player is flying: Jump goes up and the D-pad's middle down.
     pub flying: bool,
@@ -175,7 +178,7 @@ enum Role {
     Descend,
     Hotbar,
     /// A finger that does nothing until it lifts: a second one on a menu or on the D-pad, the
-    /// middle's tap, or one the screen changed under.
+    /// middle's tap, or one the scene changed under.
     Spent,
 }
 
@@ -238,7 +241,14 @@ impl Touch {
         !self.fingers.is_empty()
     }
 
-    pub fn touch(&mut self, layout: &Layout, event: TouchEvent, now: Instant) -> Vec<Input> {
+    /// A finger's event, on what the game shows now.
+    pub fn touch(
+        &mut self,
+        layout: &Layout,
+        context: Context,
+        event: TouchEvent,
+        now: Instant,
+    ) -> Vec<Input> {
         let TouchEvent {
             id,
             phase,
@@ -246,6 +256,7 @@ impl Touch {
             here,
         } = event;
         let mut out = Vec::new();
+        self.follow(context, now, &mut out);
         let index = self.fingers.iter().position(|f| f.id == id);
         match (phase, index) {
             (Phase::Start, _) => {
@@ -289,23 +300,7 @@ impl Touch {
     /// fingers held still long enough to mine or use.
     pub fn frame(&mut self, context: Context, now: Instant) -> Vec<Input> {
         let mut out = Vec::new();
-        let mode_changed = context.mode != self.context.mode;
-        if mode_changed || !context.slots {
-            self.menus.shift.latch = menu::Latch::Off;
-        }
-        self.context = context;
-        if mode_changed {
-            // What fingers held stops with the screen they held it on.
-            for i in 0..self.fingers.len() {
-                let role = std::mem::replace(&mut self.fingers[i].role, Role::Spent);
-                match role {
-                    Role::Menu(gesture) => self.let_go(gesture, &mut out),
-                    Role::Pad { .. } | Role::Stick { .. } => self.stop_moving(now, &mut out),
-                    _ => {}
-                }
-            }
-            self.keys.release_all(now, &mut out);
-        }
+        self.follow(context, now, &mut out);
         self.keys.due(now, &mut out);
         self.menu_holds(now, &mut out);
         let mapping = if context.held_item_used_over_time {
@@ -327,6 +322,30 @@ impl Touch {
             }
         }
         out
+    }
+
+    /// What the game shows now. Another mode or scene ends what every finger was doing: it does
+    /// nothing more until it lifts, a button it held down comes up clicking nothing, and Shift
+    /// lets go.
+    fn follow(&mut self, context: Context, now: Instant, out: &mut Vec<Input>) {
+        let changed = (context.mode, context.scene) != (self.context.mode, self.context.scene);
+        if !context.slots {
+            self.menus.shift.latch = menu::Latch::Off;
+        }
+        self.context = context;
+        if !changed {
+            return;
+        }
+        for i in 0..self.fingers.len() {
+            let role = std::mem::replace(&mut self.fingers[i].role, Role::Spent);
+            match role {
+                Role::Menu(gesture) => self.let_go(gesture, out),
+                Role::Pad { .. } | Role::Stick { .. } => self.stop_moving(now, out),
+                _ => {}
+            }
+        }
+        self.menus.shift = Default::default();
+        self.keys.release_all(now, out);
     }
 
     /// A finger holds `mapping` down.
@@ -529,6 +548,7 @@ mod tests {
             let here = Here::default();
             self.touch(
                 layout,
+                self.context,
                 TouchEvent {
                     id,
                     phase,
