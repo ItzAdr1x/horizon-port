@@ -151,6 +151,53 @@ pub struct Request {
     pub reply: mpsc::Sender<String>,
 }
 
+/// `type [--field name|seed] [--replace] [--] TEXT`, as the game reads it from any client.
+pub struct TypeArgs<'a> {
+    pub field: Option<&'a str>,
+    pub replace: bool,
+    pub text: &'a str,
+}
+
+impl<'a> TypeArgs<'a> {
+    /// The options are whole words before the text, and `--` ends them.
+    pub fn parse(line: &'a str) -> Self {
+        let mut args = TypeArgs {
+            field: None,
+            replace: false,
+            text: "",
+        };
+        let mut rest = line
+            .trim_start()
+            .strip_prefix("type")
+            .unwrap_or("")
+            .strip_prefix(' ')
+            .unwrap_or("");
+        loop {
+            let (word, after) = rest.split_once(' ').unwrap_or((rest, ""));
+            let after = after.trim_start();
+            rest = match word {
+                "--replace" => {
+                    args.replace = true;
+                    after
+                }
+                "--field" => {
+                    let (name, after) = after.split_once(' ').unwrap_or((after, ""));
+                    args.field = Some(name);
+                    after.trim_start()
+                }
+                "--" => {
+                    args.text = rest.strip_prefix("-- ").unwrap_or("");
+                    return args;
+                }
+                _ => {
+                    args.text = rest;
+                    return args;
+                }
+            };
+        }
+    }
+}
+
 pub struct Server {
     path: PathBuf,
     requests: mpsc::Receiver<Request>,
@@ -403,6 +450,27 @@ mod tests {
         let mut reply = String::new();
         BufReader::new(stream).read_line(&mut reply).unwrap();
         assert!(reply.contains("error"));
+    }
+
+    #[test]
+    fn type_takes_whole_option_words_before_the_text_and_none_after_dash_dash() {
+        let parse = |line| {
+            let args = TypeArgs::parse(line);
+            (args.field, args.replace, args.text)
+        };
+        assert_eq!(
+            parse("type --field name --replace Agent World"),
+            (Some("name"), true, "Agent World")
+        );
+        assert_eq!(parse("type /say hi"), (None, false, "/say hi"));
+        assert_eq!(parse("type --replacement"), (None, false, "--replacement"));
+        assert_eq!(parse("type --fieldx seed"), (None, false, "--fieldx seed"));
+        assert_eq!(
+            parse("type --replace -- --field seed"),
+            (None, true, "--field seed")
+        );
+        assert_eq!(parse("type --  two  spaces"), (None, false, " two  spaces"));
+        assert_eq!(parse("type --"), (None, false, ""));
     }
 
     #[test]

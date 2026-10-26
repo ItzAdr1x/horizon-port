@@ -3,7 +3,7 @@ use super::{
     Game, Screen,
     typing::{Edit, Field},
 };
-use horizon_client::{Result, items::ItemStack};
+use horizon_client::{Result, control::TypeArgs, items::ItemStack};
 use horizon_core::geometry::Vec3;
 use serde_json::{Value, json};
 use std::{
@@ -997,53 +997,6 @@ impl Game<'_> {
     }
 }
 
-/// `type [--field name|seed] [--replace] [--] TEXT`.
-struct TypeArgs<'a> {
-    field: Option<&'a str>,
-    replace: bool,
-    text: &'a str,
-}
-
-impl<'a> TypeArgs<'a> {
-    /// The options are whole words before the text, and `--` ends them.
-    fn parse(line: &'a str) -> Self {
-        let mut args = TypeArgs {
-            field: None,
-            replace: false,
-            text: "",
-        };
-        let mut rest = line
-            .trim_start()
-            .strip_prefix("type")
-            .unwrap_or("")
-            .strip_prefix(' ')
-            .unwrap_or("");
-        loop {
-            let (word, after) = rest.split_once(' ').unwrap_or((rest, ""));
-            let after = after.trim_start();
-            rest = match word {
-                "--replace" => {
-                    args.replace = true;
-                    after
-                }
-                "--field" => {
-                    let (name, after) = after.split_once(' ').unwrap_or((after, ""));
-                    args.field = Some(name);
-                    after.trim_start()
-                }
-                "--" => {
-                    args.text = rest.strip_prefix("-- ").unwrap_or("");
-                    return args;
-                }
-                _ => {
-                    args.text = rest;
-                    return args;
-                }
-            };
-        }
-    }
-}
-
 /// The field `type` changes, from the field in front and the focused one, decided before it
 /// changes anything: `--field` focuses one of the title's boxes, so the title must take the keys.
 fn type_target(front: Option<Field>, focused: Option<Field>, field: Option<&str>) -> Result<Field> {
@@ -1151,27 +1104,6 @@ fn key_code(name: &str) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn type_takes_whole_option_words_before_the_text_and_none_after_dash_dash() {
-        let parse = |line| {
-            let args = TypeArgs::parse(line);
-            (args.field, args.replace, args.text)
-        };
-        assert_eq!(
-            parse("type --field name --replace Agent World"),
-            (Some("name"), true, "Agent World")
-        );
-        assert_eq!(parse("type /say hi"), (None, false, "/say hi"));
-        assert_eq!(parse("type --replacement"), (None, false, "--replacement"));
-        assert_eq!(parse("type --fieldx seed"), (None, false, "--fieldx seed"));
-        assert_eq!(
-            parse("type --replace -- --field seed"),
-            (None, true, "--field seed")
-        );
-        assert_eq!(parse("type --  two  spaces"), (None, false, " two  spaces"));
-        assert_eq!(parse("type --"), (None, false, ""));
-    }
 
     #[test]
     fn type_refuses_before_it_changes_anything() {

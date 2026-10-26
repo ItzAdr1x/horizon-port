@@ -103,6 +103,9 @@ class Cli:
                 options.append(k if k in BARE.get(tool, []) else '--' + k)
             elif v is not False and v is not None:
                 options += ['--' + k, str(v)]
+        # `type` reads options, and the spaces after them, from the front of its text.
+        if tool == 'type' and positional:
+            positional.insert(0, '--')
         # Options first: free text (type, command) runs to the end of the line.
         words = [cmd] + (options + positional if tool in ('type', 'command') else positional + options)
         if tool == 'screenshot':

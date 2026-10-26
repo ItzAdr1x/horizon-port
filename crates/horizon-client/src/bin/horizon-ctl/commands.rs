@@ -706,8 +706,9 @@ pub fn line_for(c: &Cmd, args: &Value) -> Result<Vec<String>, String> {
     }
     // Options go before free text, which runs to the end of the line.
     words.extend(flags);
-    // `type` reads options from the front of its text: `--` keeps text that starts like one.
-    if c.name == "type" && rest.as_deref().is_some_and(|t| t.starts_with("--")) {
+    // `type` reads options, and the spaces after them, from the front of its text: `--` keeps
+    // the text as sent.
+    if c.name == "type" && rest.is_some() {
         words.push("--".to_owned());
     }
     words.extend(rest);
@@ -807,13 +808,28 @@ mod tests {
         );
         assert_eq!(
             line_for(typing, &json!({ "field": "seed", "text": "5" })).unwrap(),
-            ["type", "--field", "seed", "5"]
+            ["type", "--field", "seed", "--", "5"]
         );
         let open = find("open").unwrap();
         assert!(
             line_for(open, &json!({ "world": "A", "mode": "creative" }))
                 .unwrap_err()
                 .contains("seed")
+        );
+    }
+
+    #[test]
+    fn the_game_reads_mcp_type_text_as_sent() {
+        let words = line_for(
+            find("type").unwrap(),
+            &json!({ "field": "name", "text": "  --replace new" }),
+        )
+        .unwrap();
+        let line = words.join(" ");
+        let args = horizon_client::control::TypeArgs::parse(&line);
+        assert_eq!(
+            (args.field, args.replace, args.text),
+            (Some("name"), false, "  --replace new")
         );
     }
 
