@@ -25,7 +25,7 @@ use super::app_state::{self, EventWrapper};
 use super::notification_center::create_observer;
 use super::window::WinitUIWindow;
 use crate::dpi::PhysicalPosition;
-use crate::event::{ElementState, Event, Force, KeyEvent, Touch, TouchPhase, WindowEvent};
+use crate::event::{ElementState, Event, Force, Ime, KeyEvent, Touch, TouchPhase, WindowEvent};
 use crate::keyboard::{Key, KeyCode, KeyLocation, NamedKey, NativeKeyCode, PhysicalKey};
 use crate::platform_impl::platform::DEVICE_ID;
 use crate::platform_impl::KeyEventExtra;
@@ -357,6 +357,28 @@ declare_class!(
         fn can_become_first_responder(&self) -> bool {
             true
         }
+
+        // The app hears when the view takes the keyboard and when it gives it up, its own asking
+        // or not: the iPad's hide key, for one, gives it up.
+        #[method(becomeFirstResponder)]
+        fn become_first_responder(&self) -> bool {
+            let was = unsafe { self.isFirstResponder() };
+            let became: bool = unsafe { msg_send![super(self), becomeFirstResponder] };
+            if became && !was {
+                self.send_ime(Ime::Enabled);
+            }
+            became
+        }
+
+        #[method(resignFirstResponder)]
+        fn resign_first_responder(&self) -> bool {
+            let was = unsafe { self.isFirstResponder() };
+            let resigned: bool = unsafe { msg_send![super(self), resignFirstResponder] };
+            if resigned && was {
+                self.send_ime(Ime::Disabled);
+            }
+            resigned
+        }
     }
 
     unsafe impl NSObjectProtocol for WinitView {}
@@ -467,6 +489,17 @@ impl WinitView {
     fn window(&self) -> Option<Retained<WinitUIWindow>> {
         // SAFETY: `WinitView`s are always installed in a `WinitUIWindow`
         (**self).window().map(|window| unsafe { Retained::cast(window) })
+    }
+
+    fn send_ime(&self, ime: Ime) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        let event = EventWrapper::StaticEvent(Event::WindowEvent {
+            window_id: RootWindowId(window.id()),
+            event: WindowEvent::Ime(ime),
+        });
+        app_state::handle_nonuser_event(MainThreadMarker::from(self), event);
     }
 
     /// The system keyboard will move or go: the view keeps to the part of the window above a

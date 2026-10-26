@@ -158,7 +158,7 @@ impl Inner {
 
     pub fn pre_present_notify(&self) {}
 
-    /// The window's corner: with `inner_size`, the whole window.
+    /// The view's corner, which is the window's: a docked keyboard takes from the view's bottom.
     pub fn inner_position(&self) -> Result<PhysicalPosition<i32>, NotSupportedError> {
         self.outer_position()
     }
@@ -369,7 +369,9 @@ impl Inner {
 
     /// Show / hide the keyboard. To show the keyboard, we call `becomeFirstResponder`,
     /// requesting focus for the [WinitView]. Since [WinitView] implements
-    /// [objc2_ui_kit::UIKeyInput], the keyboard will be shown.
+    /// [objc2_ui_kit::UIKeyInput], the keyboard will be shown. Showing it again while the view
+    /// has the focus changes nothing: the view sends `Ime::Enabled` when it takes the focus and
+    /// `Ime::Disabled` when it loses it, whoever asked.
     /// <https://developer.apple.com/documentation/uikit/uiresponder/1621113-becomefirstresponder>
     pub fn set_ime_allowed(&self, allowed: bool) {
         if allowed {
