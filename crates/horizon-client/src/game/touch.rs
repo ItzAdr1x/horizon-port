@@ -37,27 +37,30 @@ fn phase(phase: TouchPhase) -> Phase {
     }
 }
 
-/// The mouse event one of the touch layer's pointer inputs stands for. `pick` is the mouse button
-/// the pick block mapping is bound to, which the touch layer's middle button stands for.
-fn mouse_event(device_id: DeviceId, input: &Input, pick: MouseButton) -> Option<WindowEvent> {
-    let button = |button, state| WindowEvent::MouseInput {
-        device_id,
-        state,
-        button: match button {
+/// The mouse event one of the touch layer's pointer inputs stands for. Its middle button is the
+/// pick block action, whatever that is bound to, which `Game::touch_pick` drives without one.
+fn mouse_event(device_id: DeviceId, input: &Input) -> Option<WindowEvent> {
+    let button = |button, state| {
+        let button = match button {
             fingers::MouseButton::Left => MouseButton::Left,
             fingers::MouseButton::Right => MouseButton::Right,
-            fingers::MouseButton::Middle => pick,
-        },
+            fingers::MouseButton::Middle => return None,
+        };
+        Some(WindowEvent::MouseInput {
+            device_id,
+            state,
+            button,
+        })
     };
-    Some(match *input {
-        Input::Pointer(at) => WindowEvent::CursorMoved {
+    match *input {
+        Input::Pointer(at) => Some(WindowEvent::CursorMoved {
             device_id,
             position: PhysicalPosition::new(at[0], at[1]),
-        },
+        }),
         Input::Press { button: b, .. } => button(b, ElementState::Pressed),
         Input::Release(b) | Input::Abort(b) => button(b, ElementState::Released),
-        _ => return None,
-    })
+        _ => None,
+    }
 }
 
 /// The creative screen's trash slot, which has no slot id of its own.
@@ -251,9 +254,6 @@ impl Game<'_> {
         device_id: DeviceId,
         inputs: Vec<Input>,
     ) {
-        let pick = horizon_client::keybinds::mouse_button(self.settings.keys.get("key.pickItem"))
-            .filter(|b| !matches!(b, MouseButton::Left | MouseButton::Right))
-            .unwrap_or(MouseButton::Middle);
         // While a world opens or saves, presses, clicks and looking are dropped; releases still
         // go, so the touch state and the game agree, and the pointer meets window_event's checks.
         let busy = self.pending_save.is_some()
@@ -297,8 +297,20 @@ impl Game<'_> {
                 _ => {}
             }
             let result = match input {
+                Input::Press {
+                    button: fingers::MouseButton::Middle,
+                    ..
+                } => {
+                    self.touch_pick(true);
+                    Ok(())
+                }
+                Input::Release(fingers::MouseButton::Middle)
+                | Input::Abort(fingers::MouseButton::Middle) => {
+                    self.touch_pick(false);
+                    Ok(())
+                }
                 Input::Pointer(_) | Input::Press { .. } | Input::Release(_) | Input::Abort(_) => {
-                    if let Some(event) = mouse_event(device_id, &input, pick) {
+                    if let Some(event) = mouse_event(device_id, &input) {
                         self.window_event(event_loop, id, event);
                     }
                     Ok(())
@@ -341,6 +353,22 @@ impl Game<'_> {
                 log::warn!("Horizon: touch: {e}");
             }
             changed |= clicks && self.scene() != before;
+        }
+    }
+
+    /// The pick block action on an inventory, as its key's press or release would be (a long
+    /// press on a creative item takes a full stack), whatever the key is bound to.
+    fn touch_pick(&mut self, down: bool) {
+        if !matches!(self.screen, Screen::Inventory | Screen::Creative) {
+            return;
+        }
+        if down {
+            self.inventory_pick_press();
+        } else {
+            self.inventory_pick_release();
+        }
+        if let Some(key) = self.container {
+            self.container_changed(key);
         }
     }
 
@@ -461,7 +489,7 @@ impl Loading {
         for input in inputs {
             if let Input::Wheel(lines) = input {
                 self.menu_wheel(lines);
-            } else if let Some(event) = mouse_event(touch.device_id, &input, MouseButton::Middle) {
+            } else if let Some(event) = mouse_event(touch.device_id, &input) {
                 self.menu_event(event_loop, event)?;
             }
         }
@@ -472,6 +500,26 @@ impl Loading {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pick_action_reaches_no_mouse_binding() {
+        let device = DeviceId::dummy();
+        let middle = fingers::MouseButton::Middle;
+        let press = Input::Press {
+            button: middle,
+            fresh: true,
+        };
+        assert!(mouse_event(device, &press).is_none());
+        assert!(mouse_event(device, &Input::Release(middle)).is_none());
+        assert!(matches!(
+            mouse_event(device, &Input::Abort(fingers::MouseButton::Right)),
+            Some(WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Right,
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn widgets_drawn_last_frame_say_what_a_finger_is_on() {
