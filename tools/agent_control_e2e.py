@@ -568,6 +568,8 @@ def suggestions_scenario(d, out):
         if 'sign' in d('block', x=x, y=y, z=z):
             break
         d('wait', ticks=1)
+    else:
+        raise Failed('the sign never reached the client')
     d('signedit', x=x, y=y, z=z)
     for i, line in enumerate(['line one', 'line two', 'line three', 'line four']):
         if i:
