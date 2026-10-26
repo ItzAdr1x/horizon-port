@@ -10662,6 +10662,9 @@ impl Game<'_> {
             }
             return Ok(());
         }
+        if key == KeyCode::Escape && self.recipe_book_escape() {
+            return Ok(());
+        }
         if self.sort_key_press(key) {
             return Ok(());
         }

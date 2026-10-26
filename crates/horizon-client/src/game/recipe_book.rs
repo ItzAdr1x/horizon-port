@@ -210,6 +210,19 @@ impl Game<'_> {
             }
         }
     }
+    /// `RecipeBookComponent.keyPressed`'s Escape: a book covering the menu hides, and the screen
+    /// stays. `key_pressed` asks first, so the keyboard's Escape, the touch Back button and the
+    /// pad's B (both `pad_back`) all get it, on a server's screen too.
+    pub(super) fn recipe_book_escape(&mut self) -> bool {
+        let Some(book) = self.active_book() else {
+            return false;
+        };
+        if !self.recipe_book_covers() || self.spectator() {
+            return false;
+        }
+        self.set_book_open(book, false);
+        true
+    }
     fn book_filtering(&self, book: BookType) -> bool {
         self.level.recipe_book.filtering[book.index()]
     }
