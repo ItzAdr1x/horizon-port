@@ -57,7 +57,8 @@ POSITIONAL = {
     'wait_for': ['condition', 'value'], 'open': ['world', 'seed', 'mode'], 'select': ['slot'],
     'summon': ['kind', 'x', 'y', 'z'], 'interact_entity': ['id'], 'effect': ['id', 'seconds', 'amplifier'],
     'xp': ['levels'], 'options': ['page'], 'lan': ['action'], 'world_backup': ['folder'],
-    'world_rename': ['folder', 'name'], 'world_delete': ['folder'],
+    'world_rename': ['folder', 'name'], 'world_delete': ['folder'], 'setblock': ['x', 'y', 'z', 'block'],
+    'signedit': ['x', 'y', 'z'],
 }
 # Booleans the game takes as bare words.
 BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'middle', 'shift'], 'summon': ['baby']}
@@ -559,6 +560,23 @@ def suggestions_scenario(d, out):
     d('key', key='esc', action='tap')
     if d('screen')['screen'] == 'chat':
         d('key', key='esc', action='tap')
+
+    pos = d('state')['player']['position']
+    x, y, z = int(pos[0]) + 2, int(pos[1]), int(pos[2])
+    d('setblock', x=x, y=y, z=z, block='oak_sign')
+    for _ in range(20):  # on the server thread, the sign reaches this client a round trip later
+        if 'sign' in d('block', x=x, y=y, z=z):
+            break
+        d('wait', ticks=1)
+    d('signedit', x=x, y=y, z=z)
+    for i, line in enumerate(['line one', 'line two', 'line three', 'line four']):
+        if i:
+            d('key', key='enter', action='tap')
+        d('type', text=line)
+    d('type', replace=True, text='fresh')
+    d('key', key='esc', action='tap')
+    front = d('block', x=x, y=y, z=z)['sign']['front']
+    assert front == ['fresh', '', '', ''], front
 
     cases = [
         ('/giv', '/give'),
