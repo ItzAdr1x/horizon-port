@@ -11,9 +11,11 @@ states (wait-for) and reads the event log; the consume scenario eats and drinks 
 golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport; the
 pick scenario middle-clicks slots (AbstractContainerScreen's cloning): a full stack in creative, from
 the hotbar and from an item tab, and nothing in survival; the suggestions scenario checks
-slash-command Tab completion on single player's connected client after a fresh launch; the no-ai
-scenario turns No AI on in a scratch game home and checks that horizon-ctl, its MCP server and the
-game's control socket all refuse.
+slash-command Tab completion on single player's connected client after a fresh launch; the touch
+scenario (CLI only) puts fingers on the inventory: a held stack painted into the crafting grid one
+item at a time, nothing on another item, the result or under a recipe's alternatives, and Escape
+hiding a recipe book that covers a narrow inventory; the no-ai scenario turns No AI on in a scratch
+game home and checks that horizon-ctl, its MCP server and the game's control socket all refuse.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
@@ -58,10 +60,11 @@ POSITIONAL = {
     'summon': ['kind', 'x', 'y', 'z'], 'interact_entity': ['id'], 'effect': ['id', 'seconds', 'amplifier'],
     'xp': ['levels'], 'options': ['page'], 'lan': ['action'], 'world_backup': ['folder'],
     'world_rename': ['folder', 'name'], 'world_delete': ['folder'], 'setblock': ['x', 'y', 'z', 'block'],
-    'signedit': ['x', 'y', 'z'],
+    'signedit': ['x', 'y', 'z'], 'touch': ['phase', 'finger', 'x', 'y'], 'click_at': ['x', 'y'],
 }
 # Booleans the game takes as bare words.
-BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'middle', 'shift'], 'summon': ['baby']}
+BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'middle', 'shift'], 'summon': ['baby'],
+        'click_at': ['right']}
 
 
 class Failed(Exception):
@@ -537,6 +540,134 @@ def pick_scenario(d, out):
     return {'cloned': shown['item']}
 
 
+def touch_scenario(d, out):
+    # Launched 1068x720: GUI scale 2 leaves the recipe book beside the inventory, and the automatic
+    # scale makes the GUI 356 wide, under the 379 where the open book covers it (an unfolded iPhone
+    # Duo's is 357).
+    d('click', id='singleplayer')
+    if 'game' not in widgets(d):
+        d('click', id='create-new-world')
+    d('type', field='name', replace=True, text='Touch')
+    d('click', id='create-new-world')
+    d('wait_for', condition='loaded', timeout=400)
+    d('command', command='gamemode survival')
+    d('command', command='clear @s')
+    d('command', command='recipe give @s *')
+    d('give', item='oak_log', count=3)
+    d('give', item='birch_log', count=2)
+    d('wait', ticks=2)
+    d('options_set', key='guiScale', value='2')
+    assert d('ui')['gui_size'][0] >= 379, d('ui')['gui_size']
+    assert d('open_inventory')['screen'] == 'inventory'
+    fingers = iter(range(1, 1000))
+    oak = lambda n: {'item': 'minecraft:oak_log', 'count': n}
+    birch = {'item': 'minecraft:birch_log', 'count': 2}
+    planks = {'item': 'minecraft:oak_planks', 'count': 4}
+
+    def middle(bounds):
+        x, y, w, h = bounds
+        return x + w / 2, y + h / 2
+
+    def slot_at(slot):
+        return middle(widgets(d)[f'slot-{slot}']['bounds'])
+
+    def down(at):
+        finger = next(fingers)
+        d('touch', phase='start', finger=finger, x=at[0], y=at[1])
+        return finger
+
+    def up(finger, at):
+        d('touch', phase='end', finger=finger, x=at[0], y=at[1])
+
+    def tap(at):
+        up(down(at), at)
+
+    def menu():
+        """The crafting grid's first two slots, its result and the hand, read in one reply."""
+        screen = d('screen')
+        slots = {s['slot']: s for s in screen['slots']}
+        stack = lambda s: {k: s[k] for k in ('item', 'count')} if s.get('item') else None
+        return {'100': stack(slots[100]), '101': stack(slots[101]), '200': stack(slots[200]),
+                'hand': screen['carried']}
+
+    def count(stack):
+        return stack['count'] if stack else 0
+
+    # 1. Three logs held on an empty grid slot go down one at a time while the finger stays.
+    tree = widgets(d)
+    logs = next(w for w in tree.values() if w.get('stack') == oak(3))
+    tap(middle(logs['bounds']))
+    assert menu()['hand'] == oak(3), menu()
+    grid = slot_at(100)
+    finger = down(grid)
+    counts, deadline = [], time.time() + 5
+    while True:
+        now = menu()
+        placed = count(now['100'])
+        assert placed + count(now['hand']) == 3 and placed >= (counts or [0])[-1], (counts, now)
+        counts.append(placed)
+        if placed == 3 or time.time() > deadline:
+            break
+    assert counts[-1] == 3, f'the held finger put down {counts}'
+    up(finger, grid)
+    painted = {'100': oak(3), '101': None, '200': planks, 'hand': None}
+    assert menu() == painted, menu()
+
+    # 2. Held on another item, or on the result, a stack in hand changes nothing, nor at the lift.
+    birches = next(w for w in widgets(d).values() if w.get('stack') == birch)
+    tap(middle(birches['bounds']))
+    before = dict(painted, hand=birch)
+    assert menu() == before, menu()
+    for slot in (100, 200):
+        at = slot_at(slot)
+        finger = down(at)
+        time.sleep(1.2)
+        assert menu() == before, (slot, menu())
+        up(finger, at)
+        assert menu() == before, (slot, menu())
+
+    # 3. A recipe's alternatives, open beside the wide inventory, take a held finger and a tap:
+    # nothing goes on a grid slot, and the tap only hides them.
+    book = d('screen')['recipe_book']['targets']
+    tap(middle(book[0]))
+    assert d('state')['recipe_book'] == {'presentation': 'docked', 'open': True}
+    closed = d('state')['scene']
+    recipes = [r for r in d('screen')['recipe_book']['targets'] if r[2:] == [25, 25]]
+    for recipe in recipes:
+        d('click_at', x=middle(recipe)[0], y=middle(recipe)[1], right=True)
+        if d('state')['scene'] != closed:
+            break
+    else:
+        raise AssertionError(f'none of {len(recipes)} recipes shows alternatives')
+    at = slot_at(101)
+    finger = down(at)
+    time.sleep(1.2)
+    assert menu() == before, menu()
+    up(finger, at)
+    assert menu() == before, menu()
+    assert d('state')['scene'] == closed, 'the tap beside the alternatives hid them'
+
+    # 4. The automatic GUI scale is narrow: the open book covers the inventory and a held stack
+    # puts nothing under it (cancelled: a tap there would choose whatever recipe covers the slot);
+    # Escape, where the touch Back button and the pad's B lead too, hides the book and leaves the
+    # inventory open.
+    d('options_set', key='guiScale', value='0')
+    width = d('ui')['gui_size'][0]
+    assert width < 379, f'the automatic GUI is {width} wide'
+    assert d('state')['recipe_book'] == {'presentation': 'modal', 'open': True}
+    at = slot_at(101)
+    finger = down(at)
+    time.sleep(1.2)
+    assert menu() == before, menu()
+    d('touch', phase='cancel', finger=finger, x=at[0], y=at[1])
+    d('key', key='escape', action='tap')
+    state = d('state')
+    assert state['screen'] == 'inventory' and state['recipe_book'] == {'presentation': 'closed', 'open': False}, state
+    d('close')
+    steps = [n for i, n in enumerate(counts) if i == 0 or n != counts[i - 1]]
+    return {'grid_while_held': steps, 'narrow_gui': width}
+
+
 def suggestions_scenario(d, out):
     # Start from the title screen: single player's client joins through memory,
     # without opening a server world and building its command registries.
@@ -653,7 +784,10 @@ def manage_scenario(d, out):
 
 SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario, 'events': events_scenario,
              'consume': consume_scenario, 'pick': pick_scenario, 'suggestions': suggestions_scenario,
-             'manage': manage_scenario}
+             'manage': manage_scenario, 'touch': touch_scenario}
+# Scenarios with commands the MCP server leaves out, and their games' arguments.
+CLI_ONLY = {'touch'}
+LAUNCH = {'touch': {'width': 1068, 'height': 720, 'no-pause': True}}
 
 
 REFUSAL = "AI features are off: turn off No AI in the launcher's settings"
@@ -790,7 +924,7 @@ def run(mode, ctl, out, resources, which='survival'):
     driver = (Cli if mode == 'cli' else Mcp)(ctl, socket, work, env)
     started = time.time()
     try:
-        driver('launch', wait=False, offscreen=sys.platform == 'darwin')
+        driver('launch', wait=False, offscreen=sys.platform == 'darwin', **LAUNCH.get(which, {}))
         summary = SCENARIOS[which](driver, out)
         print(f'[{mode}] PASS in {time.time() - started:.0f} s: {summary}')
         return True
@@ -832,7 +966,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     modes = ['cli', 'mcp'] if args.mode == 'both' else [args.mode]
     scenarios = [*SCENARIOS, 'no-ai', 'setting'] if args.scenario == 'all' else [args.scenario]
-    results = {f'{m}/{s}': run(m, bins / 'horizon-ctl', out, resources, s) for m in modes for s in scenarios}
+    results = {f'{m}/{s}': run(m, bins / 'horizon-ctl', out, resources, s)
+               for m in modes for s in scenarios if m == 'cli' or s not in CLI_ONLY}
     print(json.dumps(results))
     sys.exit(0 if all(results.values()) else 1)
 
