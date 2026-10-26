@@ -104,8 +104,8 @@ impl Game<'_> {
                 visited: vec![slot],
             };
             self.tweak_place(&mut drag, slot);
-            self.inv_drag = None;
-            self.inv_clicks.skip_release();
+            self.inv.drag = None;
+            self.inv.clicks.skip_release();
             self.tweaks.drag = Some(drag);
             return true;
         }
@@ -153,14 +153,14 @@ impl Game<'_> {
             } else if let Some(held) = drag.held.clone() {
                 // Holding a stack: only slots of the same item, and only
                 // while vanilla's drag hasn't spread.
-                let spread = self.inv_drag.as_ref().is_some_and(|(_, s)| s.len() > 1);
+                let spread = self.inv.drag.as_ref().is_some_and(|(_, s)| s.len() > 1);
                 if let Some(s) = stack.filter(|s| s.same_item_same_components(&held))
                     && (drag.active || !spread)
                 {
                     if !drag.active {
                         drag.active = true;
-                        self.inv_drag = None;
-                        self.inv_clicks.skip_release();
+                        self.inv.drag = None;
+                        self.inv.clicks.skip_release();
                     }
                     if shift {
                         self.tweak_click(slot, 0, Input::QuickMove);

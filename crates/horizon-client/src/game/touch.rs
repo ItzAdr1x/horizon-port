@@ -291,12 +291,9 @@ impl Game<'_> {
             }
             match input {
                 // A press of the touch layer's own never makes a double click (PICKUP_ALL).
-                Input::Press { fresh: true, .. } => self.last_inv_click = None,
-                // Whatever a mouse button's release would do to the inventory is undone first.
-                Input::Abort(_) if matches!(self.screen, Screen::Inventory | Screen::Creative) => {
-                    self.inv_drag = None;
-                    self.inv_clicks.skip_release();
-                }
+                Input::Press { fresh: true, .. } => self.inv.last_click = None,
+                // Whatever a mouse button's release would do to an inventory is undone first.
+                Input::Abort(_) => self.inventory_abort(),
                 _ => {}
             }
             let result = match input {

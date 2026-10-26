@@ -1147,6 +1147,31 @@ fn select_creative_tab(
     clicks.skip_release();
 }
 
+/// What an inventory screen keeps between clicks, as vanilla keeps it on its `Screen` object:
+/// another scene (`Game::scene`) starts afresh.
+#[derive(Default)]
+struct ScreenClicks {
+    /// `AbstractContainerScreen`'s quick craft and skip-release state.
+    clicks: horizon_client::container_screen::Clicks,
+    /// A quick craft drag over inventory slots: (button, game slots so far).
+    drag: Option<(i32, Vec<usize>)>,
+    /// The last click, for the double click that gathers a stack.
+    last_click: Option<(std::time::Instant, usize, bool)>,
+    scene: u64,
+}
+
+impl ScreenClicks {
+    /// The clicks of `scene`, the one shown now.
+    fn follow(&mut self, scene: u64) {
+        if scene != self.scene {
+            *self = Self {
+                scene,
+                ..Self::default()
+            };
+        }
+    }
+}
+
 struct Game<'a> {
     /// Shared with an integrated server; `collision` and `motion` borrow from it.
     res: Arc<Resources>,
@@ -1189,14 +1214,9 @@ struct Game<'a> {
     carried: Option<ItemStack>,
     craft_grid: Vec<Option<ItemStack>>,
     craft_size: usize,
-    /// A quick craft drag over inventory slots: (button, game slots so far).
-    inv_drag: Option<(i32, Vec<usize>)>,
-    /// `AbstractContainerScreen`'s quick craft and skip-release state.
-    inv_clicks: horizon_client::container_screen::Clicks,
+    inv: ScreenClicks,
     /// The Mouse Tweaks extra's drag and wheel (`tweaks`).
     tweaks: tweaks::Tweaks,
-    /// The last inventory click, for the double click that gathers a stack.
-    last_inv_click: Option<(std::time::Instant, usize, bool)>,
     /// While the touch controls hold Shift down: whether a keyboard already held it, in `keys`
     /// and in `physical_keys`, so it stays held when touch lets go.
     touch_shift: Option<(bool, bool)>,
@@ -4737,7 +4757,7 @@ impl Game<'_> {
     }
     /// The quick craft drag in progress, as the menu engine previews it.
     fn drag_view(&mut self) -> Option<DragView> {
-        let (ty, slots) = self.inv_drag.clone()?;
+        let (ty, slots) = self.inv.drag.clone()?;
         let mut view = None;
         self.menu_session(|menu, env, to_menu| {
             let menu_slots: Option<Vec<usize>> = slots.iter().map(|&g| to_menu(g)).collect();
@@ -6215,7 +6235,7 @@ impl Game<'_> {
         let (slot, outside) = self.inventory_target();
         let shift = self.has_shift_down();
         let target = Target::of(slot, outside);
-        let input = self.inv_clicks.press(
+        let input = self.inv.clicks.press(
             &target,
             Self::screen_button(right),
             self.carried.is_none(),
@@ -6227,8 +6247,8 @@ impl Game<'_> {
             // starts a drag whose release drops it.
             match input {
                 Some(input) => self.throw_click(right, input),
-                None if self.inv_clicks.quick_crafting().is_some() => {
-                    self.inv_drag = Some((i32::from(right), Vec::new()));
+                None if self.inv.clicks.quick_crafting().is_some() => {
+                    self.inv.drag = Some((i32::from(right), Vec::new()));
                 }
                 None => {}
             }
@@ -6242,10 +6262,10 @@ impl Game<'_> {
             && slot != 200
         {
             let now = std::time::Instant::now();
-            let double = self.last_inv_click.is_some_and(|(at, last, was_right)| {
+            let double = self.inv.last_click.is_some_and(|(at, last, was_right)| {
                 last == slot && was_right == right && now.duration_since(at).as_millis() < 250
             });
-            self.last_inv_click = Some((now, slot, right));
+            self.inv.last_click = Some((now, slot, right));
             // mouseClicked's QUICK_MOVE (and Horizon's at-press QUICK_MOVE
             // of a carried stack, mouseReleased's in vanilla) remember the
             // stack it moves.
@@ -6271,8 +6291,8 @@ impl Game<'_> {
                         });
                     }
                 }
-                self.last_inv_click = None;
-                self.inv_clicks.skip_release();
+                self.inv.last_click = None;
+                self.inv.clicks.skip_release();
                 return;
             }
         }
@@ -6286,14 +6306,14 @@ impl Game<'_> {
             let double = !right
                 && !display
                 && self.carried.is_some()
-                && self.last_inv_click.is_some_and(|(at, last, was_right)| {
+                && self.inv.last_click.is_some_and(|(at, last, was_right)| {
                     last == slot && !was_right && now.duration_since(at).as_millis() < 250
                 });
-            self.last_inv_click = Some((now, slot, right));
+            self.inv.last_click = Some((now, slot, right));
             if double && self.menu_click(Some(slot), 0, Input::PickupAll) {
-                self.last_inv_click = None;
+                self.inv.last_click = None;
                 // The double click's own release (`mouseReleased`'s PICKUP_ALL).
-                self.inv_clicks.skip_release();
+                self.inv.clicks.skip_release();
                 return;
             }
             if self.carried.is_some() {
@@ -6303,7 +6323,7 @@ impl Game<'_> {
                 } else {
                     Vec::new()
                 };
-                self.inv_drag = Some((ty, first));
+                self.inv.drag = Some((ty, first));
                 return;
             }
         }
@@ -6314,8 +6334,8 @@ impl Game<'_> {
                 Some(input) => {
                     self.menu_click(slot, i32::from(right), input);
                 }
-                None if self.inv_clicks.quick_crafting().is_some() => {
-                    self.inv_drag = Some((i32::from(right), Vec::new()));
+                None if self.inv.clicks.quick_crafting().is_some() => {
+                    self.inv.drag = Some((i32::from(right), Vec::new()));
                 }
                 None => {}
             }
@@ -6354,7 +6374,7 @@ impl Game<'_> {
         {
             return;
         }
-        self.last_inv_click = None;
+        self.inv.last_click = None;
         let position = winit::dpi::PhysicalPosition::new(at[0], at[1]);
         let button = |state| WindowEvent::MouseInput {
             device_id,
@@ -6372,12 +6392,21 @@ impl Game<'_> {
             self.window_event(event_loop, id, event);
         }
     }
+    /// A press on an inventory taken back (a cancelled touch, or the scene changed under it):
+    /// what it began is forgotten, and its release clicks nothing.
+    pub(super) fn inventory_abort(&mut self) {
+        self.inv = ScreenClicks {
+            scene: self.scene(),
+            ..ScreenClicks::default()
+        };
+        self.inv.clicks.skip_release();
+    }
     /// Mouse movement while a quick craft drag is running.
     fn inventory_drag_move(&mut self) {
         if self.tweaks_on() && self.tweak_drag_move(self.inventory_target().0) {
             return;
         }
-        let Some((ty, slots)) = self.inv_drag.clone() else {
+        let Some((ty, slots)) = self.inv.drag.clone() else {
             return;
         };
         let Some(r) = self.renderer.as_ref() else {
@@ -6389,7 +6418,7 @@ impl Game<'_> {
             && slot < Creative::DISPLAY
             && !slots.contains(&slot)
             && self.quick_craft_accepts(slot, ty, slots.len())
-            && let Some((_, slots)) = self.inv_drag.as_mut()
+            && let Some((_, slots)) = self.inv.drag.as_mut()
         {
             slots.push(slot);
         }
@@ -6496,8 +6525,8 @@ impl Game<'_> {
         use horizon_client::container_screen::{Release, Target};
         self.tweak_release();
         let (slot, outside) = self.inventory_target();
-        let dragged = self.inv_drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
-        let release = self.inv_clicks.release(
+        let dragged = self.inv.drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
+        let release = self.inv.clicks.release(
             &Target::of(slot, outside),
             Self::screen_button(right),
             self.carried.is_none(),
@@ -6508,12 +6537,12 @@ impl Game<'_> {
         match (release, Target::of(slot, outside)) {
             (Release::QuickCraft, _) => self.inventory_release(),
             (Release::Click(input), Target::Outside) => {
-                self.inv_drag = None;
+                self.inv.drag = None;
                 self.throw_click(right, input);
             }
-            (Release::Click(input), Target::Slot(slot)) if self.inv_drag.is_some() => {
+            (Release::Click(input), Target::Slot(slot)) if self.inv.drag.is_some() => {
                 // The drag never reached a slot: a plain click where it ends.
-                self.inv_drag = None;
+                self.inv.drag = None;
                 if !self.menu_click(Some(slot), i32::from(right), input) {
                     self.click_inventory(right);
                 }
@@ -6521,7 +6550,7 @@ impl Game<'_> {
                     self.container_changed(key);
                 }
             }
-            _ => self.inv_drag = None,
+            _ => self.inv.drag = None,
         }
     }
     /// A press of the pick block button (`keyPickItem`, the middle button by
@@ -6533,8 +6562,8 @@ impl Game<'_> {
     fn inventory_pick_press(&mut self) {
         use horizon_client::container_screen::{Button, Target};
         let (slot, outside) = self.inventory_target();
-        let was_crafting = self.inv_clicks.quick_crafting().is_some();
-        let input = self.inv_clicks.press(
+        let was_crafting = self.inv.clicks.quick_crafting().is_some();
+        let input = self.inv.clicks.press(
             &Target::of(slot, outside),
             Button::Middle,
             self.carried.is_none(),
@@ -6546,12 +6575,12 @@ impl Game<'_> {
             (Some(input), Some(slot)) if !outside => {
                 self.menu_click(Some(slot), 2, input);
             }
-            (None, _) if !was_crafting && self.inv_clicks.quick_crafting().is_some() => {
+            (None, _) if !was_crafting && self.inv.clicks.quick_crafting().is_some() => {
                 // Item tab display slots take no drags.
                 let first = slot.filter(|&s| {
                     s != 200 && s < Creative::DISPLAY && self.quick_craft_accepts(s, 2, 0)
                 });
-                self.inv_drag = Some((2, first.into_iter().collect()));
+                self.inv.drag = Some((2, first.into_iter().collect()));
             }
             _ => {}
         }
@@ -6562,8 +6591,8 @@ impl Game<'_> {
     fn inventory_pick_release(&mut self) {
         use horizon_client::container_screen::{Button, Release, Target};
         let (slot, outside) = self.inventory_target();
-        let dragged = self.inv_drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
-        let release = self.inv_clicks.release(
+        let dragged = self.inv.drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
+        let release = self.inv.clicks.release(
             &Target::of(slot, outside),
             Button::Middle,
             self.carried.is_none(),
@@ -6574,16 +6603,16 @@ impl Game<'_> {
         match (release, slot) {
             (Release::QuickCraft, _) => self.inventory_release(),
             (Release::Click(input), Some(slot)) if !outside => {
-                self.inv_drag = None;
+                self.inv.drag = None;
                 self.menu_click(Some(slot), 2, input);
             }
-            _ => self.inv_drag = None,
+            _ => self.inv.drag = None,
         }
     }
     /// Mouse release: finishes a quick craft drag (one slot is a plain click).
     fn inventory_release(&mut self) {
         use horizon_client::menu::Input;
-        let Some((ty, slots)) = self.inv_drag.take() else {
+        let Some((ty, slots)) = self.inv.drag.take() else {
             return;
         };
         if slots.len() == 1 {
@@ -9774,9 +9803,9 @@ impl Game<'_> {
         for (i, t) in tabs.iter().enumerate() {
             let (tx, ty) = Creative::tab_position(t);
             if cx >= ox + tx && cx < ox + tx + 26.0 && cy >= oy + ty && cy < oy + ty + 32.0 {
-                select_creative_tab(&mut self.creative_screen, &mut self.inv_clicks, i);
-                self.inv_drag = None;
-                self.last_inv_click = None;
+                select_creative_tab(&mut self.creative_screen, &mut self.inv.clicks, i);
+                self.inv.drag = None;
+                self.inv.last_click = None;
                 return;
             }
         }
@@ -9793,8 +9822,8 @@ impl Game<'_> {
                 } else {
                     self.carried = None;
                 }
-                self.inv_drag = None;
-                self.inv_clicks = Default::default();
+                self.inv.drag = None;
+                self.inv.clicks = Default::default();
             } else if self.slot_at(&batch, cx, cy).is_some() || self.clicked_outside(&batch) {
                 self.inventory_press(right);
             }
@@ -10928,6 +10957,7 @@ impl ApplicationHandler for Game<'_> {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
             return;
         }
+        self.inv.follow(self.scene());
         // Touch controls on iOS, where fingers are the only input; elsewhere touch screens keep
         // what the system makes of them. First, so every finger's end reaches them: the mouse
         // events they make go through the checks below.
@@ -11745,6 +11775,7 @@ impl ApplicationHandler for Game<'_> {
         if self.pending_save.is_some() {
             return;
         }
+        self.inv.follow(self.scene());
         self.poll_pads(event_loop);
         self.touch_frame(event_loop);
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
@@ -11866,10 +11897,8 @@ impl<'a> Game<'a> {
             carried: None,
             craft_grid: vec![None; 9],
             craft_size: 2,
-            inv_drag: None,
+            inv: Default::default(),
             tweaks: Default::default(),
-            inv_clicks: Default::default(),
-            last_inv_click: None,
             touch_shift: None,
             last_quick_moved: None,
             container: None,
@@ -13687,6 +13716,32 @@ mod tests {
         fn shared<T: Send + Sync>() {}
         shared::<Resources>();
         shared::<PackResources>();
+    }
+
+    #[test]
+    fn another_scene_starts_the_inventory_clicks_afresh() {
+        let mut inv = ScreenClicks::default();
+        inv.follow(1);
+        // A press holding a stack starts a quick craft drag over slot 3.
+        let slot = Target::Slot(3usize);
+        assert_eq!(
+            inv.clicks.press(&slot, Button::Left, false, false, false),
+            None
+        );
+        inv.drag = Some((0, vec![3]));
+        inv.last_click = Some((std::time::Instant::now(), 3, false));
+        inv.follow(1);
+        assert!(inv.clicks.quick_crafting().is_some());
+        assert!(inv.drag.is_some() && inv.last_click.is_some());
+        inv.follow(2);
+        assert_eq!(inv.clicks.quick_crafting(), None);
+        assert!(inv.drag.is_none() && inv.last_click.is_none());
+        // The next screen's release with a stack in hand is a plain click, not the old drag.
+        assert_eq!(
+            inv.clicks
+                .release(&slot, Button::Left, false, false, false, false),
+            Release::Click(horizon_client::menu::Input::Pickup)
+        );
     }
 
     #[test]
