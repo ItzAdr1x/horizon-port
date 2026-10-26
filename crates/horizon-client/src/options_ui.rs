@@ -2647,7 +2647,10 @@ impl OptionsUi {
             && self.selected_key.is_none()
             && self.selected_pad_action.is_none()
             && match self.page() {
-                Page::Packs => self.pack_screen.is_some(),
+                Page::Packs => self
+                    .pack_screen
+                    .as_ref()
+                    .is_some_and(crate::pack_screen::PackScreen::search_focused),
                 Page::Language => true,
                 _ => self.settings_search_active(),
             }
@@ -3417,6 +3420,28 @@ mod tests {
         // A resized window supplies a new maximum on the next interaction.
         Opt::GuiScale.cycle(&mut s, true, [854, 480]);
         assert_eq!(s.gui_scale, 1);
+    }
+
+    #[test]
+    fn the_pack_screen_takes_typing_while_its_search_box_has_the_focus() {
+        let atlas =
+            crate::hud::HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets"))
+                .unwrap();
+        let m = crate::screen_draw::Measure(&atlas.font);
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Packs);
+        ui.packs(&atlas, (480.0, 320.0));
+        assert!(
+            ui.typing(),
+            "the search box has the focus as the screen opens"
+        );
+        let screen = ui.pack_screen.as_mut().unwrap();
+        let (x, y) = (0..480)
+            .flat_map(|x| (0..320).map(move |y| (f64::from(x), f64::from(y))))
+            .find(|&(x, y)| screen.button_at(&m, x, y))
+            .expect("a footer button");
+        screen.click(&m, x, y);
+        assert!(!ui.typing(), "a footer button took the focus");
     }
 
     #[test]
