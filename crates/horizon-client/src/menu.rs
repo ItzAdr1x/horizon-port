@@ -3452,6 +3452,99 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn the_last_item_in_hand_moved_is_one_moved() {
+        let one = stack("oak_log", 1).unwrap();
+        assert!(moved_one(&one, None, None, stack("oak_log", 1).as_ref()));
+        assert!(moved_one(
+            &one,
+            None,
+            stack("oak_log", 3).as_ref(),
+            stack("oak_log", 4).as_ref()
+        ));
+        let two = stack("oak_log", 2).unwrap();
+        assert!(
+            !moved_one(&two, None, None, stack("oak_log", 2).as_ref()),
+            "both went"
+        );
+        assert!(
+            !moved_one(&one, None, None, None),
+            "the item went nowhere to be seen"
+        );
+    }
+
+    #[test]
+    fn another_item_or_other_components_is_not_one_moved() {
+        let logs = stack("oak_log", 5).unwrap();
+        let mut named = logs.clone();
+        named.data_mut().custom_name = Some("Log".to_owned());
+        let four = |s: &ItemStack| {
+            Some(ItemStack {
+                count: 4,
+                ..s.clone()
+            })
+        };
+        let one = |s: &ItemStack| {
+            Some(ItemStack {
+                count: 1,
+                ..s.clone()
+            })
+        };
+        assert!(moved_one(
+            &logs,
+            four(&logs).as_ref(),
+            None,
+            one(&logs).as_ref()
+        ));
+        assert!(
+            !moved_one(&logs, four(&logs).as_ref(), None, one(&named).as_ref()),
+            "the slot holds a named log"
+        );
+        assert!(
+            !moved_one(&logs, four(&named).as_ref(), None, one(&logs).as_ref()),
+            "the hand holds named logs"
+        );
+        assert!(
+            !moved_one(
+                &named,
+                four(&named).as_ref(),
+                stack("oak_log", 3).as_ref(),
+                stack("oak_log", 4).as_ref()
+            ),
+            "a named log on plain ones"
+        );
+        assert!(
+            !moved_one(
+                &logs,
+                stack("dirt", 3).as_ref(),
+                stack("dirt", 3).as_ref(),
+                Some(&logs)
+            ),
+            "a swap"
+        );
+    }
+
+    #[test]
+    fn a_craft_taken_from_a_result_is_not_one_moved() {
+        let planks = stack("oak_planks", 4).unwrap();
+        let result = stack("oak_planks", 4);
+        assert!(!moved_one(
+            &planks,
+            stack("oak_planks", 8).as_ref(),
+            result.as_ref(),
+            result.as_ref()
+        ));
+        assert!(
+            !moved_one(
+                &planks,
+                stack("oak_planks", 3).as_ref(),
+                result.as_ref(),
+                result.as_ref()
+            ),
+            "the hand lost one that the slot never showed"
+        );
+    }
+
+    #[test]
     fn item_picker_quick_move_deletes_a_hotbar_stack() {
         with_picker("stone", |env, menu| {
             menu.set_slot(env, 45, stack("dirt", 12));
