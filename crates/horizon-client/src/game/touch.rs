@@ -183,8 +183,8 @@ impl Game<'_> {
         }
         let id = self.slot_at(batch, p.0, p.1)?;
         let (kind, filled) = match id {
-            200 => (SlotKind::Result, self.slot_view(id).is_some()),
             id if id >= Creative::DISPLAY => (SlotKind::Display, self.creative_display_filled(id)),
+            id if self.output_slot(id) => (SlotKind::Result, self.slot_view(id).is_some()),
             _ => (SlotKind::Normal, self.slot_view(id).is_some()),
         };
         Some(Spot::Slot(SlotSpot {
@@ -263,7 +263,7 @@ impl Game<'_> {
                 Input::Press { .. }
                     | Input::Release(_)
                     | Input::Abort(_)
-                    | Input::PutBack(_)
+                    | Input::PutDown(_)
                     | Input::Wheel(_)
             );
             if changed && clicks {
@@ -298,24 +298,8 @@ impl Game<'_> {
                     }
                     Ok(())
                 }
-                Input::PutBack(at) => {
-                    if self.carried.is_some() {
-                        self.last_inv_click = None;
-                        let left = fingers::MouseButton::Left;
-                        let click = [
-                            Input::Pointer(at),
-                            Input::Press {
-                                button: left,
-                                fresh: true,
-                            },
-                            Input::Release(left),
-                        ];
-                        for input in &click {
-                            if let Some(event) = mouse_event(device_id, input, pick) {
-                                self.window_event(event_loop, id, event);
-                            }
-                        }
-                    }
+                Input::PutDown(at) => {
+                    self.inventory_put_down(event_loop, id, device_id, at);
                     Ok(())
                 }
                 Input::Shift(down) => {

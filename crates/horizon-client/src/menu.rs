@@ -220,6 +220,24 @@ enum Role {
     MountEquip(&'static str),
 }
 
+impl Role {
+    /// A result or output: `mayPlace` refuses every stack, and a take crafts, trades or smelts.
+    fn output(self) -> bool {
+        matches!(
+            self,
+            Role::Output
+                | Role::CraftResult
+                | Role::Inert
+                | Role::LoomResult
+                | Role::MerchantResult
+                | Role::StoneResult
+                | Role::GrindResult
+                | Role::CombineResult
+                | Role::CartoResult
+        )
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Slot {
     container: usize,
@@ -1154,6 +1172,12 @@ impl Menu {
     pub fn slot(&self, i: usize) -> Option<&ItemStack> {
         let s = self.slots[i];
         self.containers[s.container][s.index].as_ref()
+    }
+
+    /// Slot `i` is a result or output: nothing can be put there, and a click with its item in
+    /// hand takes another craft, trade or smelt.
+    pub fn output(&self, i: usize) -> bool {
+        self.slots[i].role.output()
     }
 
     /// Sets a slot as a test fixture does (`Slot.set`).
@@ -3043,6 +3067,42 @@ pub(crate) mod tests {
         let mut menu = Menu::new(kind);
         menu.creative = true;
         test(&env, &mut menu);
+    }
+
+    #[test]
+    fn the_outputs_are_each_menus_result_slot() {
+        let outputs = |kind| {
+            let menu = Menu::new(kind);
+            (0..menu.slot_count())
+                .filter(|&i| menu.output(i))
+                .collect::<Vec<_>>()
+        };
+        for (kind, slot) in [
+            (Kind::Inventory, 0),
+            (Kind::Crafting, 0),
+            (Kind::Furnace("smelting"), 2),
+            (Kind::Stonecutter, 1),
+            (Kind::Merchant, 2),
+            (Kind::Loom, 3),
+            (Kind::Grindstone, 2),
+            (Kind::Cartography, 2),
+            (Kind::Anvil, 2),
+            (Kind::Smithing, 3),
+            (Kind::CrafterBlock, 45),
+        ] {
+            assert_eq!(outputs(kind), [slot], "{kind:?}");
+        }
+        for kind in [
+            Kind::Chest(3),
+            Kind::Hopper,
+            Kind::Brewing,
+            Kind::Enchanting,
+            Kind::Beacon,
+            Kind::Mount(5),
+            Kind::ItemPicker,
+        ] {
+            assert!(outputs(kind).is_empty(), "{kind:?}");
+        }
     }
 
     /// `HorseInventoryMenu`: a shift-click wears horse armour, then saddles,

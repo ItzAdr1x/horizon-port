@@ -218,9 +218,8 @@ fn a_stack_dragged_with_an_empty_hand_drops_where_it_lifts() {
         [
             Input::Pointer(B),
             Input::Release(LEFT),
-            press(true),
-            Input::Release(LEFT),
-            Input::PutBack(A),
+            Input::PutDown(B),
+            Input::PutDown(A),
             Input::Pointer(AWAY)
         ]
     );
@@ -234,7 +233,7 @@ fn a_stack_dropped_on_a_gap_goes_back_where_it_came_from() {
         [
             Input::Pointer(B),
             Input::Release(LEFT),
-            Input::PutBack(A),
+            Input::PutDown(A),
             Input::Pointer(AWAY)
         ]
     );
@@ -282,10 +281,31 @@ fn a_stack_dragged_beyond_the_panel_is_thrown_and_hinted() {
 
 #[test]
 fn a_crafted_stack_dropped_on_another_is_never_put_back() {
-    let result = slot_of(200, true, SlotKind::Result);
+    let result = slot_of(650, true, SlotKind::Result);
     let (_, lifted) = drag_and_lift(result, slot(4));
-    assert!(!lifted.iter().any(|i| matches!(i, Input::PutBack(_))));
-    assert_eq!(lifted.iter().filter(|i| **i == press(true)).count(), 1);
+    assert_eq!(
+        lifted,
+        [
+            Input::Pointer(B),
+            Input::Release(LEFT),
+            Input::PutDown(B),
+            Input::Pointer(AWAY)
+        ]
+    );
+}
+
+#[test]
+fn a_crafted_stack_dropped_on_a_gap_stays_in_hand() {
+    let result = slot_of(650, true, SlotKind::Result);
+    let (_, lifted) = drag_and_lift(result, Here::default());
+    assert_eq!(
+        lifted,
+        [
+            Input::Pointer(B),
+            Input::Release(LEFT),
+            Input::Pointer(AWAY)
+        ]
+    );
 }
 
 #[test]

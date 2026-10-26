@@ -5218,6 +5218,16 @@ impl Game<'_> {
             _ => self.slot_mut(i).clone(),
         }
     }
+    /// Slot `i` of the open menu is a result or output, as the menu engine has it: nothing can
+    /// be put there, and a click with its item in hand takes another craft, trade or smelt.
+    pub(super) fn output_slot(&mut self, i: usize) -> bool {
+        let mut output = false;
+        self.menu_session(|menu, _, to_menu| {
+            output = to_menu(i).is_some_and(|s| menu.output(s));
+            Some(false)
+        });
+        output
+    }
     fn craft_result(&self) -> Option<ItemStack> {
         self.craft_recipe().map(|(_, result)| result)
     }
@@ -6276,6 +6286,44 @@ impl Game<'_> {
             return;
         }
         self.click_inventory(right);
+    }
+    /// A touch drag's stack put down at `at` (physical pixels): a left click there while the
+    /// hand holds a stack, but never on a result, where the click would take another craft.
+    pub(super) fn inventory_put_down(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        id: WindowId,
+        device_id: DeviceId,
+        at: [f64; 2],
+    ) {
+        let Some(batch) = self.gui_scale() else {
+            return;
+        };
+        let (x, y) = (at[0] as f32 / batch.scale, at[1] as f32 / batch.scale);
+        if self.carried.is_none()
+            || self
+                .slot_at(&batch, x, y)
+                .is_some_and(|i| self.output_slot(i))
+        {
+            return;
+        }
+        self.last_inv_click = None;
+        let position = winit::dpi::PhysicalPosition::new(at[0], at[1]);
+        let button = |state| WindowEvent::MouseInput {
+            device_id,
+            state,
+            button: MouseButton::Left,
+        };
+        for event in [
+            WindowEvent::CursorMoved {
+                device_id,
+                position,
+            },
+            button(ElementState::Pressed),
+            button(ElementState::Released),
+        ] {
+            self.window_event(event_loop, id, event);
+        }
     }
     /// Mouse movement while a quick craft drag is running.
     fn inventory_drag_move(&mut self) {

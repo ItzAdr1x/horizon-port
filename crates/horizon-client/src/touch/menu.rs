@@ -52,7 +52,8 @@ pub struct SlotSpot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SlotKind {
     Normal,
-    /// The crafting grid's result: Shift crafts all it can.
+    /// A result or output (the crafting grid's, a station's, a furnace's): a take crafts, trades
+    /// or smelts, nothing is put there, and Shift on the crafting grid's crafts all it can.
     Result,
     /// A creative item tab's slot: clicks make copies.
     Display,
@@ -421,20 +422,20 @@ impl Touch {
                 ..
             } => {
                 out.push(Input::Release(MouseButton::Left));
-                // The drop, and whatever it leaves in hand put back where the stack came from
-                // (a stack it was swapped with, a remainder). A crafted stack goes back nowhere:
-                // a click on the result would craft again.
+                // The stack put down where the finger lifts, and whatever that leaves in hand put
+                // back where it came from (a stack it was swapped with, a remainder). A crafted
+                // stack goes back nowhere: a click on the result would craft again.
                 let back = origin.kind == SlotKind::Normal;
                 match here.spot {
                     Spot::Slot(b) if b.id == origin.id => {}
                     Spot::Outside => click(out, MouseButton::Left, true),
                     Spot::Slot(_) => {
-                        click(out, MouseButton::Left, true);
+                        out.push(Input::PutDown(at));
                         if back {
-                            out.push(Input::PutBack(from));
+                            out.push(Input::PutDown(from));
                         }
                     }
-                    _ if back => out.push(Input::PutBack(from)),
+                    _ if back => out.push(Input::PutDown(from)),
                     _ => {}
                 }
             }
