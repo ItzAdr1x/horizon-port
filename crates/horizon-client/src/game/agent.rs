@@ -486,7 +486,7 @@ impl Game<'_> {
             "screen": self.screen_label(),
             // What the screen shows, as an identity (`Game::scene`). It changes with another
             // screen, or the same one opened again.
-            "scene": self.scene(),
+            "scene": super::scene_id(self.scene()),
             "menu": self.title.as_ref().map(|_| self.title_value()),
             "world": (self.title.is_none()).then(|| match &self.integrated {
                 Some(server) => server.world_name.clone(),
