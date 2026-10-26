@@ -1427,6 +1427,7 @@ impl Game<'_> {
                             batch,
                             atlas,
                             &s.name,
+                            [ox + 59.0, oy + 20.0, 110.0, 16.0],
                             (ox + 62.0, oy + 24.0, 103.0),
                             (u32::MAX, true),
                             ANVIL_NAME_CHARS,

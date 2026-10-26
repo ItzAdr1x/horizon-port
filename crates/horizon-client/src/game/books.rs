@@ -888,6 +888,7 @@ impl Game<'_> {
                     batch,
                     atlas,
                     title,
+                    [x, 49.0, 114.0, 11.0],
                     (tx, 50.0, x + 114.0 - tx),
                     (BLACK, false),
                     15,

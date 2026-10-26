@@ -9808,6 +9808,7 @@ impl Game<'_> {
                 batch,
                 atlas,
                 search,
+                [ox + 82.0, oy + 5.0, 80.0, 11.0],
                 (ox + 82.0, oy + 6.0, 80.0),
                 (u32::MAX, true),
                 clipboard::CREATIVE_SEARCH_CHARS,

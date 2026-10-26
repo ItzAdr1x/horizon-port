@@ -815,11 +815,14 @@ impl Caret {
 /// `setInvertHighlightedTextColor`), and the cursor, blinking from when the
 /// field took the focus (`TextCursorUtils.isCursorVisible`): an underscore,
 /// or a bar once the value is `max_chars` long. `shadow` is `setTextShadow`.
+/// `field` is the box a click or a finger focuses, which a caller centring
+/// the text keeps still as the value grows.
 #[allow(clippy::too_many_arguments)]
 pub fn append_field(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
     value: &str,
+    field: [f32; 4],
     (x, y, width): (f32, f32, f32),
     (color, shadow): (u32, bool),
     max_chars: usize,
@@ -827,7 +830,7 @@ pub fn append_field(
     invert_text: bool,
     focused_ms: u128,
 ) {
-    crate::widgets::target_as([x, y - 1.0, width, 11.0], crate::widgets::Kind::Field);
+    crate::widgets::target_as(field, crate::widgets::Kind::Field);
     let mut cursor_x = x;
     if !value.is_empty() {
         batch.text(atlas, value, x, y, color, shadow);
@@ -1355,28 +1358,34 @@ mod tests {
         assert_quad(q[2], ([5.0, 0.0, 9.0, 8.0], [0.8, 0.0, 1.0, 0.4]));
     }
     #[test]
-    fn an_append_field_is_a_text_field_a_finger_can_tap() {
+    fn an_append_field_is_a_text_field_a_finger_can_tap_wherever_its_text_sits() {
+        // A book title: the text centred in a 114-wide box, short, long or empty.
         let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
-        crate::widgets::end_frame(u64::MAX - 1);
-        let mut b = HudBatch::new([854, 480]);
-        append_field(
-            &mut b,
-            &atlas,
-            "",
-            (10.0, 20.0, 80.0),
-            (u32::MAX, true),
-            50,
-            false,
-            true,
-            0,
-        );
-        crate::widgets::end_frame(u64::MAX);
-        let fields: Vec<_> = crate::widgets::last_targets()
-            .into_iter()
-            .filter(|t| t.kind == crate::widgets::Kind::Field)
-            .map(|t| t.rect)
-            .collect();
-        assert_eq!(fields, vec![[10.0, 19.0, 80.0, 11.0]]);
+        let title_box = [36.0, 49.0, 114.0, 11.0];
+        for title in ["", "a", "a much longer title"] {
+            crate::widgets::end_frame(u64::MAX - 1);
+            let mut b = HudBatch::new([854, 480]);
+            let tx = 36.0 + ((114.0 - HudBatch::text_width(&atlas, title)) / 2.0).floor();
+            append_field(
+                &mut b,
+                &atlas,
+                title,
+                title_box,
+                (tx, 50.0, 150.0 - tx),
+                (0, false),
+                15,
+                false,
+                true,
+                0,
+            );
+            crate::widgets::end_frame(u64::MAX);
+            let fields: Vec<_> = crate::widgets::last_targets()
+                .into_iter()
+                .filter(|t| t.kind == crate::widgets::Kind::Field)
+                .map(|t| t.rect)
+                .collect();
+            assert_eq!(fields, vec![title_box], "title {title:?}");
+        }
     }
     #[test]
     fn append_fields_highlight_the_whole_value_and_blink_their_cursor() {
@@ -1401,6 +1410,7 @@ mod tests {
             &mut b,
             &atlas,
             "abc",
+            [0.0, 0.0, 1.0, 1.0],
             (10.0, 20.0, 80.0),
             (u32::MAX, true),
             50,
@@ -1419,6 +1429,7 @@ mod tests {
             &mut b,
             &atlas,
             "abc",
+            [0.0, 0.0, 1.0, 1.0],
             (10.0, 20.0, 103.0),
             (u32::MAX, true),
             50,
@@ -1434,6 +1445,7 @@ mod tests {
                 &mut b,
                 &atlas,
                 "abc",
+                [0.0, 0.0, 1.0, 1.0],
                 (10.0, 20.0, 103.0),
                 (0, true),
                 50,
@@ -1450,6 +1462,7 @@ mod tests {
             &mut b,
             &atlas,
             "abc",
+            [0.0, 0.0, 1.0, 1.0],
             (10.0, 20.0, 80.0),
             (u32::MAX, true),
             3,
