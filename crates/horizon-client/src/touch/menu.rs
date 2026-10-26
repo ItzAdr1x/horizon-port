@@ -4,7 +4,7 @@
 //! would send (`Input`).
 
 use super::layout::{Button, Layout};
-use super::{AWAY, HOLD, Input, Mode, Role, Touch};
+use super::{AWAY, DOUBLE_TAP, Finger, HOLD, Input, Mode, Role, Touch};
 use std::time::Instant;
 
 /// What the game shows under a finger, told afresh with every touch event in a menu. The
@@ -78,11 +78,22 @@ pub(super) enum Gesture {
     /// A mouse button is down: pressed where the finger landed, the pointer following it.
     Pressing {
         press: Press,
+        /// Shift went down with the press and goes up with its release.
+        shifted: bool,
         /// Beyond the panel at this point, where lifting throws what is carried: the hint.
         outside: Option<[f64; 2]>,
     },
     /// A long press clicked already: lifting only hovers away.
     Done,
+    /// On the Shift button.
+    Shift,
+}
+
+impl Gesture {
+    /// The finger is the mouse pointer: anything but the Shift button.
+    fn points(self) -> bool {
+        !matches!(self, Gesture::Shift)
+    }
 }
 
 /// What a menu finger's button is down for.
@@ -155,9 +166,11 @@ pub(super) fn left(landed: &Here, from: [f64; 2], here: &Here, at: [f64; 2], slo
 }
 
 /// What a finger that left where it landed at `from` presses for.
-pub(super) fn drag(landed: &Here, from: [f64; 2]) -> Press {
+pub(super) fn drag(landed: &Here, from: [f64; 2], shifted: bool) -> Press {
     match landed.spot {
         _ if landed.carrying => Press::Spread,
+        // Shifted, the press quick-moves the stack away: nothing is left in hand to put down.
+        _ if shifted => Press::Plain,
         // A creative item's copy has nowhere to go back to.
         Spot::Slot(origin)
             if origin.filled && matches!(origin.kind, SlotKind::Normal | SlotKind::Result) =>
@@ -172,6 +185,58 @@ pub(super) fn drag(landed: &Here, from: [f64; 2]) -> Press {
 fn click(out: &mut Vec<Input>, button: MouseButton, fresh: bool) {
     out.push(Input::Press { button, fresh });
     out.push(Input::Release(button));
+}
+
+/// The Shift button as the iPhone keyboard's shift key: a tap shifts the next click, a quick
+/// second tap locks it, a tap unlocks, and holding it shifts every click until it lifts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Latch {
+    #[default]
+    Off,
+    Once,
+    Locked,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ShiftKey {
+    pub(super) latch: Latch,
+    tapped: Option<Instant>,
+    held: bool,
+}
+
+impl ShiftKey {
+    /// A finger lands on the button: Off, then Once, then (quickly) Locked; a slow second tap,
+    /// or a tap while locked, lets go.
+    fn tap(&mut self, now: Instant) {
+        let quick = self
+            .tapped
+            .is_some_and(|t| now.duration_since(t) <= DOUBLE_TAP);
+        self.latch = match self.latch {
+            Latch::Off => Latch::Once,
+            Latch::Once if quick => Latch::Locked,
+            Latch::Once | Latch::Locked => Latch::Off,
+        };
+        self.tapped = Some(now);
+        self.held = true;
+    }
+    fn lift(&mut self) {
+        self.held = false;
+    }
+    pub(super) fn active(&self) -> bool {
+        self.held || self.latch != Latch::Off
+    }
+    /// Whether a click is shifted, using Once up. `latched`: the latch may shift it; creative's
+    /// trash slot, where Shift empties the whole inventory, is shifted only by a held button.
+    fn take(&mut self, latched: bool) -> bool {
+        if !latched {
+            return self.held;
+        }
+        let active = self.active();
+        if self.latch == Latch::Once {
+            self.latch = Latch::Off;
+        }
+        active
+    }
 }
 
 impl Touch {
@@ -189,8 +254,13 @@ impl Touch {
             out.push(Input::Back);
             return Role::Spent;
         }
+        if self.context.slots && layout.on(Button::Shift, px) {
+            self.menus.shift.tap(now);
+            return Role::Menu(Gesture::Shift);
+        }
         // A desk has one mouse.
-        if self.fingers.iter().any(|f| matches!(f.role, Role::Menu(_))) {
+        let pointing = |f: &Finger| matches!(f.role, Role::Menu(g) if g.points());
+        if self.fingers.iter().any(pointing) {
             return Role::Spent;
         }
         out.push(Input::Pointer(at));
@@ -219,21 +289,30 @@ impl Touch {
                 out.push(Input::Pointer(at));
                 return;
             }
-            let press = drag(&landed, from);
+            let shifted = self.shift_for(&landed);
+            let press = drag(&landed, from, shifted);
             out.push(Input::Pointer(from));
-            out.push(Input::Press {
-                button: press.button(),
-                fresh: true,
-            });
+            press_down(out, press.button(), shifted, true);
             *gesture = Gesture::Pressing {
                 press,
+                shifted,
                 outside: None,
             };
         }
-        if let Gesture::Pressing { press, outside } = gesture {
-            *outside = (press.throws() && here.spot == Spot::Outside).then_some(at);
+        match gesture {
+            Gesture::Shift => return,
+            Gesture::Pressing { press, outside, .. } => {
+                *outside = (press.throws() && here.spot == Spot::Outside).then_some(at);
+            }
+            _ => {}
         }
         out.push(Input::Pointer(at));
+    }
+
+    /// Whether a click on where a finger landed is shifted, as the Shift button stands.
+    fn shift_for(&mut self, landed: &Here) -> bool {
+        let trash = matches!(landed.spot, Spot::Slot(s) if s.kind == SlotKind::Trash);
+        self.menus.shift.take(!trash)
     }
 
     /// A menu finger lifts at `at`, over `here`.
@@ -244,6 +323,10 @@ impl Touch {
         here: Here,
         out: &mut Vec<Input>,
     ) {
+        if let Gesture::Shift = gesture {
+            self.menus.shift.lift();
+            return;
+        }
         self.menus.rest = Some(at);
         out.push(Input::Pointer(at));
         match gesture {
@@ -254,7 +337,9 @@ impl Touch {
             // Two taps on one slot reach the game as two clicks at their own lifts, so its double
             // click (PICKUP_ALL) is the game's to decide, on its own clock.
             Gesture::Pending { here: landed, .. } => {
-                click(out, MouseButton::Left, false);
+                let shifted = self.shift_for(&landed);
+                press_down(out, MouseButton::Left, shifted, false);
+                release(out, MouseButton::Left, shifted);
                 if landed.spot == Spot::Field {
                     out.push(Input::Keyboard);
                 }
@@ -281,8 +366,8 @@ impl Touch {
                     _ => {}
                 }
             }
-            Gesture::Pressing { press, .. } => out.push(Input::Release(press.button())),
-            Gesture::Done => {}
+            Gesture::Pressing { press, shifted, .. } => release(out, press.button(), shifted),
+            Gesture::Done | Gesture::Shift => {}
         }
         out.push(Input::Pointer(AWAY));
     }
@@ -305,17 +390,16 @@ impl Touch {
             if now.duration_since(*landed) < HOLD {
                 continue;
             }
-            let from = *from;
-            match hold(here) {
+            let (from, here) = (*from, *here);
+            match hold(&here) {
                 Hold::Press(press) => {
+                    let shifted = self.menus.shift.take(true);
                     out.push(Input::Pointer(from));
-                    out.push(Input::Press {
-                        button: press.button(),
-                        fresh: true,
-                    });
+                    press_down(out, press.button(), shifted, true);
                     let outside = press.throws() && here.spot == Spot::Outside;
                     *gesture = Gesture::Pressing {
                         press,
+                        shifted,
                         outside: outside.then_some(from),
                     };
                 }
@@ -332,27 +416,45 @@ impl Touch {
     /// Let go of what a menu finger holds without acting: a cancelled touch, or a screen that
     /// changed under it. Nothing hovers when the button comes up, and its release clicks nothing.
     pub(super) fn let_go(&mut self, gesture: Gesture, out: &mut Vec<Input>) {
+        if let Gesture::Shift = gesture {
+            self.menus.shift.lift();
+            return;
+        }
         out.push(Input::Pointer(AWAY));
-        if let Gesture::Pressing { press, .. } = gesture {
+        if let Gesture::Pressing { press, shifted, .. } = gesture {
             out.push(Input::Abort(press.button()));
+            if shifted {
+                out.push(Input::Shift(false));
+            }
         }
     }
 
     /// The game's screen changed under the menu fingers while it took their clicks: they do
     /// nothing more until they lift, and their buttons' releases never reach the new screen.
     pub fn spend(&mut self) -> Vec<Input> {
+        let mut out = vec![Input::Pointer(AWAY)];
         for finger in &mut self.fingers {
-            if let Role::Menu(_) = finger.role {
-                finger.role = Role::Spent;
+            match finger.role {
+                Role::Menu(Gesture::Shift) => {}
+                Role::Menu(gesture) => {
+                    if let Gesture::Pressing { shifted: true, .. } = gesture {
+                        out.push(Input::Shift(false));
+                    }
+                    finger.role = Role::Spent;
+                }
+                _ => {}
             }
         }
-        vec![Input::Pointer(AWAY)]
+        out
     }
 
     /// The physical pixels tooltips keep clear above the pointer: a fingertip while a finger is
     /// on a menu, none for a mouse.
     pub fn tooltip_lift(&self, layout: &Layout) -> f32 {
-        let pointing = self.fingers.iter().any(|f| matches!(f.role, Role::Menu(_)));
+        let pointing = self
+            .fingers
+            .iter()
+            .any(|f| matches!(f.role, Role::Menu(g) if g.points()));
         if pointing {
             layout.finger_clearance()
         } else {
@@ -366,9 +468,26 @@ impl Touch {
     }
 }
 
+/// `button` goes down, Shift first when the press is shifted.
+fn press_down(out: &mut Vec<Input>, button: MouseButton, shifted: bool, fresh: bool) {
+    if shifted {
+        out.push(Input::Shift(true));
+    }
+    out.push(Input::Press { button, fresh });
+}
+
+/// `button` comes up, then Shift if it went down with it.
+fn release(out: &mut Vec<Input>, button: MouseButton, shifted: bool) {
+    out.push(Input::Release(button));
+    if shifted {
+        out.push(Input::Shift(false));
+    }
+}
+
 /// What menus keep between fingers.
 #[derive(Debug, Default)]
 pub(super) struct Menus {
+    pub(super) shift: ShiftKey,
     /// Where the last menu finger lifted.
     rest: Option<[f64; 2]>,
 }
@@ -380,6 +499,7 @@ mod tests {
     use std::time::Instant;
 
     const LEFT: MouseButton = MouseButton::Left;
+    const TRASH_ID: u32 = u32::MAX;
 
     fn menu() -> (Touch, Layout, Instant) {
         let mut touch = Touch::default();
@@ -810,23 +930,29 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(
-            drag(&slot(3), A),
+            drag(&slot(3), A, false),
             Press::Carry {
                 origin: origin(slot(3)),
                 from: A
             }
         );
         let result = slot_of(200, true, SlotKind::Result);
-        assert!(matches!(drag(&result, A), Press::Carry { .. }));
-        assert_eq!(drag(&empty(3), A), Press::Plain);
+        assert!(matches!(drag(&result, A, false), Press::Carry { .. }));
+        assert_eq!(drag(&empty(3), A, false), Press::Plain);
         assert_eq!(
-            drag(&slot_of(901, true, SlotKind::Display), A),
+            drag(&slot_of(901, true, SlotKind::Display), A, false),
             Press::Plain
         );
-        assert_eq!(drag(&carrying(empty(3)), A), Press::Spread);
-        assert_eq!(drag(&carrying(slot(3)), A), Press::Spread);
-        assert_eq!(drag(&carrying(spot(Spot::Outside)), A), Press::Spread);
-        assert_eq!(drag(&Here::default(), A), Press::Plain);
+        assert_eq!(drag(&carrying(empty(3)), A, false), Press::Spread);
+        assert_eq!(drag(&carrying(slot(3)), A, false), Press::Spread);
+        assert_eq!(
+            drag(&carrying(spot(Spot::Outside)), A, false),
+            Press::Spread
+        );
+        assert_eq!(drag(&Here::default(), A, false), Press::Plain);
+        // Shifted, a stack quick-moves at the press: there is nothing to carry.
+        assert_eq!(drag(&slot(3), A, true), Press::Plain);
+        assert_eq!(drag(&carrying(empty(3)), A, true), Press::Spread);
     }
 
     const RIGHT: MouseButton = MouseButton::Right;
@@ -901,7 +1027,8 @@ mod tests {
             touch.fingers[0].role,
             Role::Menu(Gesture::Pressing {
                 press: Press::One,
-                outside: Some(A)
+                outside: Some(A),
+                ..
             })
         ));
     }
@@ -1008,5 +1135,198 @@ mod tests {
         assert_eq!(touch.tooltip_lift(&layout), layout.finger_clearance());
         touch.touch(&layout, event(1, Phase::End, A, slot(3)), now);
         assert_eq!(touch.tooltip_lift(&layout), 0.0);
+    }
+
+    fn inventory() -> (Touch, Layout, Instant) {
+        let (mut touch, layout, now) = menu();
+        let context = Context {
+            slots: true,
+            ..touch.context
+        };
+        touch.frame(context, now);
+        (touch, layout, now)
+    }
+
+    fn shift_button(layout: &Layout) -> [f64; 2] {
+        let [x, y, w, h] = layout.button(Button::Shift);
+        [f64::from(x + w / 2.0), f64::from(y + h / 2.0)]
+    }
+
+    /// A tap of finger `id` at `A` over `here`, and whether its click was shifted.
+    fn tap_shifted(touch: &mut Touch, layout: &Layout, id: u64, here: Here, now: Instant) -> bool {
+        touch.touch(layout, event(id, Phase::Start, A, here), now);
+        let out = touch.touch(layout, event(id, Phase::End, A, here), now);
+        let shifted = out.contains(&Input::Shift(true));
+        assert_eq!(shifted, out.contains(&Input::Shift(false)), "{out:?}");
+        if shifted {
+            assert_eq!(
+                out,
+                [
+                    Input::Pointer(A),
+                    Input::Shift(true),
+                    press(false),
+                    Input::Release(LEFT),
+                    Input::Shift(false),
+                    Input::Pointer(AWAY)
+                ]
+            );
+        }
+        shifted
+    }
+
+    fn tap_shift(touch: &mut Touch, layout: &Layout, now: Instant) {
+        let at = shift_button(layout);
+        assert!(
+            touch
+                .touch(layout, event(9, Phase::Start, at, Here::default()), now)
+                .is_empty()
+        );
+        assert!(
+            touch
+                .touch(layout, event(9, Phase::End, at, Here::default()), now)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn shift_tapped_shifts_the_next_click_only() {
+        let (mut touch, layout, now) = inventory();
+        tap_shift(&mut touch, &layout, now);
+        assert!(tap_shifted(&mut touch, &layout, 1, slot(3), now));
+        assert!(!tap_shifted(&mut touch, &layout, 2, slot(3), now));
+    }
+
+    #[test]
+    fn shift_tapped_twice_quickly_locks_until_tapped_again() {
+        let (mut touch, layout, now) = inventory();
+        tap_shift(&mut touch, &layout, now);
+        tap_shift(&mut touch, &layout, now + DOUBLE_TAP / 2);
+        for id in 1..4 {
+            assert!(tap_shifted(&mut touch, &layout, id, slot(3), now));
+        }
+        tap_shift(&mut touch, &layout, now + DOUBLE_TAP * 4);
+        assert!(!tap_shifted(&mut touch, &layout, 5, slot(3), now));
+    }
+
+    #[test]
+    fn shift_held_shifts_every_click_until_it_lifts() {
+        let (mut touch, layout, now) = inventory();
+        let at = shift_button(&layout);
+        touch.touch(&layout, event(9, Phase::Start, at, Here::default()), now);
+        // The finger on Shift leaves the pointer to another one.
+        for id in 1..4 {
+            assert!(tap_shifted(&mut touch, &layout, id, slot(3), now));
+        }
+        touch.touch(&layout, event(9, Phase::End, at, Here::default()), now);
+        assert!(!tap_shifted(&mut touch, &layout, 4, slot(3), now));
+    }
+
+    #[test]
+    fn the_shift_latch_never_reaches_the_trash() {
+        let (mut touch, layout, now) = inventory();
+        let trash = slot_of(TRASH_ID, false, SlotKind::Trash);
+        tap_shift(&mut touch, &layout, now);
+        assert!(!tap_shifted(&mut touch, &layout, 1, trash, now));
+        // The latch is still set for the next slot.
+        assert!(tap_shifted(&mut touch, &layout, 2, slot(3), now));
+        // A finger holding Shift down shifts the trash: that is deliberate.
+        let at = shift_button(&layout);
+        touch.touch(
+            &layout,
+            event(9, Phase::Start, at, Here::default()),
+            now + DOUBLE_TAP * 2,
+        );
+        assert!(tap_shifted(&mut touch, &layout, 3, trash, now));
+    }
+
+    #[test]
+    fn a_shifted_drag_from_a_stack_quick_moves_it_and_puts_nothing_down() {
+        let (mut touch, layout, now) = inventory();
+        tap_shift(&mut touch, &layout, now);
+        touch.touch(&layout, event(1, Phase::Start, A, slot(3)), now);
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::Move, B, empty(4)), now),
+            [
+                Input::Pointer(A),
+                Input::Shift(true),
+                press(true),
+                Input::Pointer(B)
+            ]
+        );
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::End, B, empty(4)), now),
+            [
+                Input::Pointer(B),
+                Input::Release(LEFT),
+                Input::Shift(false),
+                Input::Pointer(AWAY)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cancelled_shifted_drag_lets_shift_go_too() {
+        let (mut touch, layout, now) = inventory();
+        tap_shift(&mut touch, &layout, now);
+        touch.touch(&layout, event(1, Phase::Start, A, carrying(empty(3))), now);
+        touch.touch(&layout, event(1, Phase::Move, B, carrying(empty(4))), now);
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::Cancel, B, carrying(empty(4))), now),
+            [
+                Input::Pointer(AWAY),
+                Input::Abort(LEFT),
+                Input::Shift(false)
+            ]
+        );
+    }
+
+    #[test]
+    fn shift_is_only_in_inventories_and_unlocks_when_one_closes() {
+        let (mut touch, layout, now) = menu();
+        let at = shift_button(&layout);
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::Start, at, Here::default()), now),
+            [Input::Pointer(at)]
+        );
+        touch.touch(&layout, event(1, Phase::Cancel, at, Here::default()), now);
+        let (mut touch, layout, now) = inventory();
+        tap_shift(&mut touch, &layout, now);
+        tap_shift(&mut touch, &layout, now);
+        let closed = Context {
+            slots: false,
+            ..touch.context
+        };
+        touch.frame(closed, now);
+        touch.frame(
+            Context {
+                slots: true,
+                ..closed
+            },
+            now,
+        );
+        assert!(!tap_shifted(&mut touch, &layout, 1, slot(3), now));
+    }
+
+    #[test]
+    fn the_shift_key_cycles_off_once_locked() {
+        let now = Instant::now();
+        let mut key = ShiftKey::default();
+        let tap = |key: &mut ShiftKey, at| {
+            key.tap(at);
+            key.lift();
+            key.latch
+        };
+        assert_eq!(tap(&mut key, now), Latch::Once);
+        assert_eq!(tap(&mut key, now + DOUBLE_TAP), Latch::Locked);
+        assert_eq!(tap(&mut key, now + DOUBLE_TAP * 5), Latch::Off);
+        assert_eq!(tap(&mut key, now + DOUBLE_TAP * 9), Latch::Once);
+        // Too slow a second tap lets go instead of locking.
+        assert_eq!(tap(&mut key, now + DOUBLE_TAP * 11), Latch::Off);
+        assert!(!key.take(true));
+        // Held, it shifts every click; the Once its tap set is used up by the first.
+        key.tap(now + DOUBLE_TAP * 20);
+        assert!(key.take(true) && key.take(true));
+        key.lift();
+        assert!(!key.take(true));
     }
 }

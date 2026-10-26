@@ -20,6 +20,7 @@ use winit::{
     dpi::PhysicalPosition,
     event::{DeviceId, ElementState, MouseButton, Touch, TouchPhase, WindowEvent},
     event_loop::ActiveEventLoop,
+    keyboard::KeyCode,
     window::WindowId,
 };
 
@@ -222,6 +223,8 @@ impl Game<'_> {
             movement: self.settings.controller.touch_movement,
             flying: self.player.as_ref().is_some_and(|p| p.flying),
             held_item_used_over_time: self.held_item_used_over_time(),
+            slots: self.title.is_none()
+                && matches!(self.screen, Screen::Inventory | Screen::Creative),
         };
         let inputs = self.touch.frame(context, Instant::now());
         self.apply_touch(event_loop, id, DeviceId::dummy(), inputs);
@@ -263,6 +266,7 @@ impl Game<'_> {
                 Input::Pointer(_)
                     | Input::Release(_)
                     | Input::Abort(_)
+                    | Input::Shift(false)
                     | Input::Mapping(_, false)
                     | Input::Sprint(false)
             );
@@ -306,6 +310,10 @@ impl Game<'_> {
                     }
                     Ok(())
                 }
+                Input::Shift(down) => {
+                    self.touch_shift(down);
+                    Ok(())
+                }
                 Input::Keyboard => Ok(()),
                 Input::Look([dx, dy]) => {
                     self.mouse.add_motion(dx, dy);
@@ -334,6 +342,27 @@ impl Game<'_> {
         if changed {
             let inputs = self.touch.spend();
             self.apply_touch(event_loop, id, device_id, inputs);
+        }
+    }
+
+    /// Shift down or up around the touch controls' clicks, in `keys` and `physical_keys` as the
+    /// pad's quick move has it; a Shift a keyboard holds stays held.
+    fn touch_shift(&mut self, down: bool) {
+        let shift = KeyCode::ShiftLeft;
+        if down {
+            self.touch_shift.get_or_insert((
+                self.keys.contains(&shift),
+                self.physical_keys.contains(&shift),
+            ));
+            self.keys.insert(shift);
+            self.physical_keys.insert(shift);
+        } else if let Some((keys, physical)) = self.touch_shift.take() {
+            if !keys {
+                self.keys.remove(&shift);
+            }
+            if !physical {
+                self.physical_keys.remove(&shift);
+            }
         }
     }
 

@@ -104,6 +104,8 @@ pub struct Context {
     pub flying: bool,
     /// The held item is used over time (food, a bow, a shield...): a held finger uses it.
     pub held_item_used_over_time: bool,
+    /// An inventory is open: the Shift button is there.
+    pub slots: bool,
 }
 
 /// What a touch does to the game. On the title screen and in menus, only what a desk's mouse
@@ -123,6 +125,8 @@ pub enum Input {
     /// The mouse button goes up, and its release must click nothing: the touch was cancelled, or
     /// the screen changed under it.
     Abort(MouseButton),
+    /// Shift goes down or up, as the physical key a keyboard's Shift is (`has_shift_down`).
+    Shift(bool),
     /// If the hand holds a stack now, a left click here (physical pixels): a dropped stack's
     /// swap or remainder goes back where the stack came from.
     PutBack([f64; 2]),
@@ -283,6 +287,9 @@ impl Touch {
     pub fn frame(&mut self, context: Context, now: Instant) -> Vec<Input> {
         let mut out = Vec::new();
         let mode_changed = context.mode != self.context.mode;
+        if mode_changed || !context.slots {
+            self.menus.shift.latch = menu::Latch::Off;
+        }
         self.context = context;
         if mode_changed {
             // What fingers held stops with the screen they held it on.

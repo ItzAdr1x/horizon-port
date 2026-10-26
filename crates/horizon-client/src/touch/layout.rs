@@ -98,6 +98,8 @@ pub enum Button {
     Pause,
     /// Escape, on a world's menus.
     Back,
+    /// The keyboard's Shift, in inventories: bottom left, under the left thumb.
+    Shift,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -192,6 +194,10 @@ impl Layout {
                 let side = self.u(SMALL);
                 [self.u(MARGIN), self.u(MARGIN), side, side]
             }
+            Button::Shift => {
+                let side = self.u(CELL);
+                [self.u(MARGIN), h - self.u(MARGIN) - side, side, side]
+            }
         }
     }
     pub(super) fn on(&self, button: Button, at: [f32; 2]) -> bool {
@@ -274,6 +280,32 @@ mod tests {
                     assert!(!overlap(ra, *rb), "{w}x{h}: the {a} and the {b} overlap");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn shift_stays_clear_of_back_and_of_an_inventory_with_its_recipe_book() {
+        for (w, h, scale) in SCREENS {
+            let layout = Layout::new(w, h, scale);
+            let shift = layout.button(Button::Shift);
+            let g = layout.gui;
+            // The crafting book (147 GUI pixels) beside the inventory (176), which it pushes right.
+            let (gw, gh) = (w as f32 / g, h as f32 / g);
+            let panel = [
+                (gw / 2.0 - 88.0 - 77.0) * g,
+                (gh / 2.0 - 83.0) * g,
+                323.0 * g,
+                166.0 * g,
+            ];
+            assert!(
+                shift[0] >= 0.0 && shift[1] + shift[3] <= h as f32,
+                "{w}x{h}: Shift leaves the screen"
+            );
+            assert!(
+                !overlap(shift, layout.button(Button::Back)),
+                "{w}x{h}: Shift on Back"
+            );
+            assert!(!overlap(shift, panel), "{w}x{h}: Shift on the inventory");
         }
     }
 

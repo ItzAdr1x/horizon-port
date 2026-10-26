@@ -2,7 +2,7 @@
 //! pixel `Layout::unit` physical pixels wide, drawn into the HUD batch.
 
 use super::layout::{Button, Cell, KNOB, Layout, Rect};
-use super::menu::{Gesture, Hold, hold};
+use super::menu::{Gesture, Hold, Latch, hold};
 use super::{HOLD, Mode, Movement, Role, Touch};
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use std::time::{Duration, Instant};
@@ -52,6 +52,39 @@ const SNEAK: Icon = &[
     "##########",
 ];
 const DOTS: Icon = &["##..##..##", "##..##..##"];
+/// The iPhone keyboard's shift key: hollow, filled for the next click, underlined when locked.
+const SHIFT: Icon = &[
+    "....##....",
+    "...#..#...",
+    "..#....#..",
+    ".#......#.",
+    "###....###",
+    "..#....#..",
+    "..#....#..",
+    "..######..",
+];
+const SHIFT_ON: Icon = &[
+    "....##....",
+    "...####...",
+    "..######..",
+    ".########.",
+    "##########",
+    "..######..",
+    "..######..",
+    "..######..",
+];
+const SHIFT_LOCKED: Icon = &[
+    "....##....",
+    "...####...",
+    "..######..",
+    ".########.",
+    "##########",
+    "..######..",
+    "..######..",
+    "..######..",
+    "..........",
+    "..######..",
+];
 /// An arrow down to the ground: lifting here throws the stack.
 const DROP: Icon = &[
     "...####...",
@@ -188,6 +221,15 @@ impl Touch {
             Mode::Title => self.draw_menu(&mut pen, now),
             Mode::Menu => {
                 pen.button(layout.button(Button::Back), false, ARROW, Turn::Left);
+                if self.context.slots {
+                    let shift = self.menus.shift;
+                    let icon = match shift.latch {
+                        Latch::Locked => SHIFT_LOCKED,
+                        _ if shift.active() => SHIFT_ON,
+                        _ => SHIFT,
+                    };
+                    pen.button(layout.button(Button::Shift), shift.active(), icon, Turn::Up);
+                }
                 self.draw_menu(&mut pen, now);
             }
             Mode::Playing => {

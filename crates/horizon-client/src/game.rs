@@ -1179,6 +1179,9 @@ struct Game<'a> {
     tweaks: tweaks::Tweaks,
     /// The last inventory click, for the double click that gathers a stack.
     last_inv_click: Option<(std::time::Instant, usize, bool)>,
+    /// While the touch controls hold Shift down: whether a keyboard already held it, in `keys`
+    /// and in `physical_keys`, so it stays held when touch lets go.
+    touch_shift: Option<(bool, bool)>,
     /// `lastQuickMoved`: what the last Shift click moved, which a Shift
     /// double click moves every stack of.
     last_quick_moved: Option<ItemStack>,
@@ -11755,6 +11758,7 @@ impl<'a> Game<'a> {
             tweaks: Default::default(),
             inv_clicks: Default::default(),
             last_inv_click: None,
+            touch_shift: None,
             last_quick_moved: None,
             container: None,
             station: None,
