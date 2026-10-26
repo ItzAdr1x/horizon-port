@@ -5,7 +5,7 @@ use super::{Game, lan::LanHost};
 use horizon_client::{
     containers::BlockEntity,
     hud::{HudBatch, rgba},
-    signs::wood_type,
+    signs::{SignData, wood_type},
 };
 use horizon_protocol::packets::play::{self, Clientbound as C, Serverbound as S};
 use std::time::Instant;
@@ -314,6 +314,10 @@ impl Game<'_> {
             text.dark_color()
         };
         let color = rgba((color >> 16) as u8, (color >> 8) as u8, color as u8, 255);
+        horizon_client::widgets::target_as(
+            lines_box(sign, cx, y),
+            horizon_client::widgets::Kind::Field,
+        );
         let line_height = sign.line_height();
         let midpoint = (4.0 * line_height / 2.0).floor();
         let blink = (edit.opened.elapsed().as_millis() / 300) % 2 == 0;
@@ -360,4 +364,26 @@ impl Game<'_> {
 /// The sign line being edited, for Select All.
 fn sign_line_id(front: bool, line: usize) -> horizon_client::clipboard::FieldId {
     (if front { "sign.front" } else { "sign.back" }, line)
+}
+
+/// Where the editor's four lines can be, centred on (`cx`, `y`) as `draw_sign_editor` lays them
+/// out, each as wide as the sign allows: a finger's tap there asks for the keyboard.
+fn lines_box(sign: &SignData, cx: f32, y: f32) -> [f32; 4] {
+    let (width, line_height) = (sign.max_line_width(), sign.line_height());
+    let top = y - (4.0 * line_height / 2.0).floor();
+    [cx - width / 2.0, top, width, 4.0 * line_height]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lines_box;
+    use horizon_client::signs::SignData;
+
+    #[test]
+    fn a_tap_on_any_line_of_the_sign_lands_in_its_field() {
+        let mut sign = SignData::default();
+        assert_eq!(lines_box(&sign, 213.0, 90.0), [168.0, 70.0, 90.0, 40.0]);
+        sign.hanging = true;
+        assert_eq!(lines_box(&sign, 213.0, 125.0), [183.0, 107.0, 60.0, 36.0]);
+    }
 }

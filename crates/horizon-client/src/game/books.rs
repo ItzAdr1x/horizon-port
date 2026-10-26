@@ -947,6 +947,10 @@ impl Game<'_> {
                 ..
             } => {
                 indicator(batch, *page, pages.len());
+                horizon_client::widgets::target_as(
+                    page_box(left, top),
+                    horizon_client::widgets::Kind::Field,
+                );
                 let blink = (opened.elapsed().as_millis() / 300) % 2 == 0;
                 let lines = self.book_lines(&pages[*page]);
                 for (i, line) in lines.iter().take(LINES).enumerate() {
@@ -1054,5 +1058,24 @@ pub(super) fn lectern_signal(world: &horizon_client::world::World, pos: BlockPos
             (f * 14.0).floor() as i32 + 1
         })),
         _ => None,
+    }
+}
+
+/// The page's `LINES` lines of 114 pixels under the book's corner at (`left`, `top`): a finger's
+/// tap there asks for the keyboard.
+fn page_box(left: f32, top: f32) -> [f32; 4] {
+    [left + 36.0, top + 30.0, 114.0, LINES as f32 * 9.0]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LINES, page_box};
+
+    #[test]
+    fn a_tap_on_any_line_of_the_page_lands_in_its_field() {
+        let [x, y, w, h] = page_box(117.0, 2.0);
+        assert_eq!([x, y, w], [153.0, 32.0, 114.0]);
+        let last_line = 2.0 + 30.0 + (LINES - 1) as f32 * 9.0;
+        assert!(y + h >= last_line + 9.0);
     }
 }

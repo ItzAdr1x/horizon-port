@@ -327,3 +327,24 @@ fn a_server_component_keeps_its_click_and_hover_events() {
     let past = 4.0 + f64::from(font.width("CLICK")) + 20.0;
     assert!(chat.hover_at(&font, 360, past, 315.0).is_none());
 }
+
+#[test]
+fn the_input_line_is_a_text_field_a_finger_can_tap() {
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries::default();
+    let commands = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let mut screen = ChatScreen::new(&m, &commands, "", 0, 640, 360);
+    crate::widgets::end_frame(u64::MAX - 1);
+    screen.draw(&m, (0, 0), 0, 0);
+    crate::widgets::end_frame(u64::MAX);
+    let fields: Vec<_> = crate::widgets::last_targets()
+        .into_iter()
+        .filter(|t| t.kind == crate::widgets::Kind::Field)
+        .map(|t| t.rect)
+        .collect();
+    assert_eq!(fields, vec![[4.0, 348.0, 636.0, 12.0]]);
+}
