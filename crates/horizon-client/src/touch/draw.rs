@@ -336,7 +336,7 @@ impl Touch {
                     from,
                     here,
                     held: false,
-                }) if hold(&here) != Hold::Nothing => {
+                }) if hold(&here, self.context.carrying) != Hold::Nothing => {
                     pen.ring(from, now.duration_since(landed), MENU_HOLD);
                 }
                 Role::Menu(Gesture::Pressing {

@@ -108,6 +108,9 @@ pub struct Context {
     pub held_item_used_over_time: bool,
     /// An inventory is open: the Shift button is there.
     pub slots: bool,
+    /// The hand holds a stack over an open inventory: taps place it, holds place one at a
+    /// time, drags spread it.
+    pub carrying: bool,
 }
 
 /// What a touch does to the game. On the title screen and in menus, only what a desk's mouse

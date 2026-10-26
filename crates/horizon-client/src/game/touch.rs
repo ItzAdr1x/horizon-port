@@ -84,7 +84,6 @@ fn widget_here(p: (f32, f32), scale: f32) -> Here {
     Here {
         spot,
         list: list.map(|l| l.line * scale),
-        ..Here::default()
     }
 }
 
@@ -147,11 +146,10 @@ impl Game<'_> {
         };
         let p = (at[0] as f32 / batch.scale, at[1] as f32 / batch.scale);
         let mut here = widget_here(p, batch.scale);
-        if self.inventory_open() {
-            if let Some(spot) = self.inventory_spot(&batch, p) {
-                here.spot = spot;
-            }
-            here.carrying = self.carried.is_some();
+        if self.inventory_open()
+            && let Some(spot) = self.inventory_spot(&batch, p)
+        {
+            here.spot = spot;
         }
         here
     }
@@ -219,13 +217,15 @@ impl Game<'_> {
         } else {
             Mode::Playing
         };
+        let slots = self.inventory_open();
         Context {
             mode,
             scene: super::scene_id(self.scene()),
             movement: self.settings.controller.touch_movement,
             flying: self.player.as_ref().is_some_and(|p| p.flying),
             held_item_used_over_time: self.held_item_used_over_time(),
-            slots: self.inventory_open(),
+            slots,
+            carrying: slots && self.carried.is_some(),
         }
     }
 

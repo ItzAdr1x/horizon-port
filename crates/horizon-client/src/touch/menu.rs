@@ -19,8 +19,6 @@ pub struct Here {
     pub spot: Spot,
     /// Inside a list that scrolls: the physical pixels one wheel line moves it.
     pub list: Option<f32>,
-    /// The hand holds a stack: taps place it, holds place one, drags spread it.
-    pub carrying: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -152,12 +150,12 @@ pub(super) enum Hold {
     Nothing,
 }
 
-/// What a hold on where the finger landed does.
-pub(super) fn hold(landed: &Here) -> Hold {
+/// What a hold on where the finger landed does, `carrying` a stack or not.
+pub(super) fn hold(landed: &Here, carrying: bool) -> Hold {
     match landed.spot {
-        Spot::Slot(s) if landed.carrying && s.kind != SlotKind::Trash => Hold::Press(Press::One),
-        Spot::Outside if landed.carrying => Hold::Press(Press::One),
-        Spot::Slot(s) if s.filled && !landed.carrying => match s.kind {
+        Spot::Slot(s) if carrying && s.kind != SlotKind::Trash => Hold::Press(Press::One),
+        Spot::Outside if carrying => Hold::Press(Press::One),
+        Spot::Slot(s) if s.filled && !carrying => match s.kind {
             SlotKind::Normal => Hold::Press(Press::Split),
             // Vanilla's right click on the result takes one craft, as a left one does.
             SlotKind::Result => Hold::Click(MouseButton::Right),
@@ -190,13 +188,19 @@ pub(super) enum Drag {
 
 /// What a finger that landed at `from` and is now at `at` becomes. In a list it scrolls, but a
 /// scrollbar is held, and a slider or field moved sideways is the mouse's drag.
-pub(super) fn drag(landed: &Here, from: [f64; 2], at: [f64; 2], shifted: bool) -> Drag {
+pub(super) fn drag(
+    landed: &Here,
+    carrying: bool,
+    from: [f64; 2],
+    at: [f64; 2],
+    shifted: bool,
+) -> Drag {
     let sideways = (at[0] - from[0]).abs() > (at[1] - from[1]).abs();
     Drag::Press(match (landed.list, landed.spot) {
         (_, Spot::Grab) => Press::Plain,
         (Some(_), Spot::Slider | Spot::Field) if sideways => Press::Plain,
         (Some(line), _) => return Drag::Scroll(line),
-        _ if landed.carrying => Press::Spread,
+        _ if carrying => Press::Spread,
         // Shifted, the press quick-moves the stack away: nothing is left in hand to put down.
         _ if shifted => Press::Plain,
         // A creative item's copy has nowhere to go back to.
@@ -328,7 +332,14 @@ impl Touch {
                 return;
             }
             let latched = !trash(&landed);
-            match drag(&landed, from, at, self.menus.shift.shifts(latched)) {
+            let carrying = self.context.carrying;
+            match drag(
+                &landed,
+                carrying,
+                from,
+                at,
+                self.menus.shift.shifts(latched),
+            ) {
                 Drag::Press(press) => {
                     let shifted = self.menus.shift.take(latched);
                     out.push(Input::Pointer(from));
@@ -405,7 +416,7 @@ impl Touch {
         match gesture {
             // Fingers miss on a big screen, and a stack thrown into the world can't be taken
             // back: throwing is a drag beyond the panel, never a tap.
-            Gesture::Pending { .. } if here.carrying && here.spot == Spot::Outside => {}
+            Gesture::Pending { .. } if self.context.carrying && here.spot == Spot::Outside => {}
             // A tap clicks where it lifts. Two taps on one slot reach the game as two clicks at
             // their own lifts, so its double click (PICKUP_ALL) is the game's to decide, on its
             // own clock.
@@ -467,7 +478,7 @@ impl Touch {
                 continue;
             }
             let (from, here) = (*from, *here);
-            match hold(&here) {
+            match hold(&here, self.context.carrying) {
                 Hold::Press(press) => {
                     let shifted = self.menus.shift.take(true);
                     out.push(Input::Pointer(from));
