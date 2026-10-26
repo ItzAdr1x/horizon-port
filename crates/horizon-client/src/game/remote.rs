@@ -4753,6 +4753,8 @@ impl Game<'_> {
             r.menu_title = None;
         }
         self.mount_menu_reset();
+        // The next screen's book starts without this one's ghost, alternatives or search.
+        self.recipe_ui.reset_screen();
         // The client's menu has no level access: what it holds is the server's.
         self.station = None;
         self.craft_size = 2;
