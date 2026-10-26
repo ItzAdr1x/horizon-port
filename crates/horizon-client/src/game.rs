@@ -5563,13 +5563,33 @@ impl Game<'_> {
             self.draw_inventory_effects(batch, (ox, oy), 176);
         }
     }
-    /// What the screen shows, as an identity: the screen, the title's or the options' page, and
-    /// the menu or container behind it. Another one is another vanilla `Screen` object: what
-    /// the last one kept between clicks is gone, and fingers on it do nothing more.
+    /// What the screen shows, as an identity: the screen, the view of a screen with views of its
+    /// own (the title, the options, World Options), and the menu or container behind it. Another
+    /// one is another vanilla `Screen` object: what the last one kept between clicks is gone,
+    /// and fingers on it do nothing more.
     pub(super) fn scene(&self) -> u64 {
         use std::mem::discriminant;
-        let options =
-            (self.screen == Screen::Options).then(|| discriminant(&self.ui.options.page()));
+        // A screen whose own sub-screens Escape closes says which shows; a new screen decides.
+        let view = match self.screen {
+            Screen::Options => scene_id(self.ui.options.view()),
+            Screen::WorldOptions => scene_id(
+                self.world_options
+                    .as_ref()
+                    .map(lan_screen::WorldOptions::view),
+            ),
+            Screen::Playing
+            | Screen::GameModeSwitcher
+            | Screen::Paused
+            | Screen::Chat
+            | Screen::Creative
+            | Screen::Inventory
+            | Screen::Dead
+            | Screen::Stats
+            | Screen::Advancements
+            | Screen::Friends
+            | Screen::CommandBlock
+            | Screen::Win => 0,
+        };
         let menu = (
             self.container,
             self.station.as_ref().map(|s| discriminant(&s.kind)),
@@ -5582,7 +5602,7 @@ impl Game<'_> {
         scene_id((
             self.screen,
             self.title.as_ref().map(title_page),
-            options,
+            view,
             menu,
             self.covers(),
         ))

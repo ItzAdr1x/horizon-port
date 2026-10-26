@@ -424,9 +424,7 @@ impl Loading {
     /// What the title shows, as an identity (`Game::scene`).
     pub(super) fn scene(&self) -> u64 {
         let menu = &self.menu;
-        let options = menu
-            .options_open
-            .then(|| std::mem::discriminant(&menu.options.page()));
+        let options = menu.options_open.then(|| menu.options.view());
         scene_id((
             options,
             menu.title.as_ref().map(title_page),

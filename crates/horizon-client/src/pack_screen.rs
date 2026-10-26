@@ -1193,3 +1193,35 @@ mod click_sound_tests {
         assert!(!screen.confirming());
     }
 }
+
+#[cfg(test)]
+mod view_tests {
+    use super::*;
+    use crate::options_ui::{OptionsUi, Page, View};
+
+    #[test]
+    fn escape_on_the_packs_question_shows_the_packs_again() {
+        let atlas =
+            crate::hud::HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets"))
+                .unwrap();
+        let m = Measure(&atlas.font);
+        let mut screen = PackScreen::new(&m, 480, 320, false, Vec::new(), &[]);
+        screen.confirm = Some(Confirm {
+            id: "incompatible".into(),
+            title: Text::literal("Confirm"),
+            message: Text::literal("Use this pack?"),
+        });
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Packs);
+        ui.pack_screen = Some(screen);
+        assert_eq!(ui.view(), View::PackConfirm);
+        let mut settings = crate::settings::Settings::default();
+        ui.key(
+            &mut settings,
+            &atlas,
+            winit::keyboard::KeyCode::Escape,
+            None,
+        );
+        assert_eq!(ui.view(), View::Page(Page::Packs));
+    }
+}
