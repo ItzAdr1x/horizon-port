@@ -4,8 +4,13 @@
 //! would send (`Input`).
 
 use super::layout::{Button, Layout};
-use super::{AWAY, DOUBLE_TAP, Finger, HOLD, Input, Mode, Role, Touch};
-use std::time::Instant;
+use super::{AWAY, DOUBLE_TAP, Finger, Input, Mode, Role, Touch};
+use std::time::{Duration, Instant};
+
+/// A menu finger held still this long is the right button. Longer than play's hold, which
+/// splits a stack under a finger resting to read its tooltip: half a second, iOS's own long
+/// press.
+pub(super) const MENU_HOLD: Duration = Duration::from_millis(500);
 
 /// What the game shows under a finger, told afresh with every touch event in a menu. The
 /// landing one decides the gesture; later ones say where a drag is.
@@ -72,7 +77,7 @@ pub(super) enum Gesture {
         landed: Instant,
         from: [f64; 2],
         here: Here,
-        /// Held past `HOLD` on something a hold doesn't change: still a tap.
+        /// Held past `MENU_HOLD` on something a hold doesn't change: still a tap.
         held: bool,
     },
     /// A mouse button is down: pressed where the finger landed, the pointer following it.
@@ -126,7 +131,7 @@ impl Press {
     }
 }
 
-/// What holding a pending finger still for `HOLD` does: the mouse's right button, one rule
+/// What holding a pending finger still for `MENU_HOLD` does: the mouse's right button, one rule
 /// everywhere.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Hold {
@@ -387,7 +392,7 @@ impl Touch {
             else {
                 continue;
             };
-            if now.duration_since(*landed) < HOLD {
+            if now.duration_since(*landed) < MENU_HOLD {
                 continue;
             }
             let (from, here) = (*from, *here);
@@ -957,14 +962,15 @@ mod tests {
 
     const RIGHT: MouseButton = MouseButton::Right;
 
-    /// The inputs of a finger that lands at `A` over `landed` and is held still past `HOLD`.
+    /// The inputs of a finger that lands at `A` over `landed` and is held still past `MENU_HOLD`.
     fn long_press(landed: Here) -> (Touch, Layout, Instant, Vec<Input>) {
         let (mut touch, layout, now) = menu();
         touch.touch(&layout, event(1, Phase::Start, A, landed), now);
         let context = touch.context;
-        assert!(touch.frame(context, now + HOLD / 2).is_empty());
-        let held = touch.frame(context, now + HOLD);
-        (touch, layout, now + HOLD, held)
+        // Play's hold is not long enough: a finger resting to read a tooltip still hovers.
+        assert!(touch.frame(context, now + super::super::HOLD).is_empty());
+        let held = touch.frame(context, now + MENU_HOLD);
+        (touch, layout, now + MENU_HOLD, held)
     }
 
     const fn right_down() -> Input {

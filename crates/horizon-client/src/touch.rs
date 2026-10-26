@@ -26,8 +26,7 @@ use keys::Keys;
 pub use layout::{Button, Cell, Layout};
 pub use menu::{Here, MouseButton, SlotKind, SlotSpot, Spot};
 
-/// A finger held still on the view this long mines, or uses the held item; on a menu it is the
-/// right button.
+/// A finger held still on the view this long mines, or uses the held item.
 const HOLD: Duration = Duration::from_millis(300);
 /// Forward pressed again this soon after it was let go sprints.
 const DOUBLE_TAP: Duration = Duration::from_millis(300);

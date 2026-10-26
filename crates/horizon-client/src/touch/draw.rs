@@ -2,7 +2,7 @@
 //! pixel `Layout::unit` physical pixels wide, drawn into the HUD batch.
 
 use super::layout::{Button, Cell, KNOB, Layout, Rect};
-use super::menu::{Gesture, Hold, Latch, hold};
+use super::menu::{Gesture, Hold, Latch, MENU_HOLD, hold};
 use super::{HOLD, Mode, Movement, Role, Touch};
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use std::time::{Duration, Instant};
@@ -168,11 +168,11 @@ impl Pen<'_> {
         self.plate(r, pressed);
         self.icon(r, icon, turn);
     }
-    /// A ring of dots around a finger at `at`, filling as it is held for `HOLD`.
-    fn ring(&mut self, at: [f64; 2], held: Duration) {
+    /// A ring of dots around a finger at `at`, filling as it is held `held` of `hold`.
+    fn ring(&mut self, at: [f64; 2], held: Duration, hold: Duration) {
         const DOTS: u32 = 12;
         let u = self.layout.unit;
-        let lit = (held.as_secs_f32() / HOLD.as_secs_f32() * DOTS as f32) as u32;
+        let lit = (held.as_secs_f32() / hold.as_secs_f32() * DOTS as f32) as u32;
         for i in 0..DOTS {
             let angle = i as f32 / DOTS as f32 * std::f32::consts::TAU;
             let (x, y) = (
@@ -320,7 +320,9 @@ impl Touch {
                     from,
                     here,
                     held: false,
-                }) if hold(&here) != Hold::Nothing => pen.ring(from, now.duration_since(landed)),
+                }) if hold(&here) != Hold::Nothing => {
+                    pen.ring(from, now.duration_since(landed), MENU_HOLD);
+                }
                 Role::Menu(Gesture::Pressing {
                     outside: Some(at), ..
                 }) => {
@@ -343,7 +345,7 @@ impl Touch {
                 ..
             } = finger.role
             {
-                pen.ring(last, now.duration_since(landed));
+                pen.ring(last, now.duration_since(landed), HOLD);
             }
         }
     }
