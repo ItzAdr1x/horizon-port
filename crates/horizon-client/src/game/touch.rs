@@ -181,8 +181,9 @@ impl Game<'_> {
         if self.recipe_alternatives_at(p) {
             return Some(Spot::Secondary);
         }
-        // A book covering the menu takes every press, beyond the panel too.
-        if self.recipe_book_covers() {
+        // The book takes every press, beyond the panel too: no slot, so a tap only reaches the
+        // book, and a stack in hand paints nothing under it.
+        if self.recipe_book_takes_pointer() {
             return None;
         }
         if self.clicked_outside_at(batch, p) {

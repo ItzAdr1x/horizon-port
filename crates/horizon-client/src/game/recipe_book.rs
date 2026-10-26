@@ -192,6 +192,18 @@ impl Game<'_> {
     pub(super) fn recipe_book_covers(&self) -> bool {
         self.recipe_presentation() == Presentation::Modal
     }
+    /// The book takes every press, which none of the menu's slots, buttons or beyond-the-panel
+    /// gets: while it covers the menu (`AbstractRecipeBookScreen.mouseClicked`), and while it
+    /// shows a recipe's alternatives on any width, where a press beside them only hides them
+    /// (`RecipeBookPage.mouseClicked`). Hover stays the menu's (`slot_at`).
+    pub(super) fn recipe_book_takes_pointer(&self) -> bool {
+        self.recipe_book_open() == Some(true)
+            && (self.recipe_ui.overlay.is_some() || self.recipe_book_covers())
+    }
+    /// A press of a button the book has no use for: the alternatives hide.
+    pub(super) fn recipe_book_hide_alternatives(&mut self) {
+        self.recipe_ui.overlay = None;
+    }
     pub(super) fn recipe_scene(&self) -> RecipeScene {
         RecipeScene {
             presentation: self.recipe_presentation(),
@@ -674,6 +686,25 @@ impl Game<'_> {
         self.ensure_book();
         let covers = self.recipe_book_covers();
         let cursor = self.cursor;
+        let open = self.book_open(book_type) && !self.spectator();
+        if open {
+            self.refresh_book_view(book_type);
+            // The alternatives capture the click before the book's buttons and the menu's
+            // (`RecipeBookPage.mouseClicked`): one beside them only hides them.
+            if let Some(overlay) = self.recipe_ui.overlay.take() {
+                let maxrow = if overlay.entries.len() <= 16 { 4 } else { 5 };
+                for (n, (entry, _)) in overlay.entries.iter().enumerate() {
+                    let x = overlay.x + 4.0 + 25.0 * (n % maxrow) as f32;
+                    let y = overlay.y + 5.0 + 25.0 * (n / maxrow) as f32;
+                    if !right && inside(cursor, x, y, 24.0, 24.0) {
+                        let shift = self.shift_down();
+                        self.place_from_book(book_type, *entry, shift);
+                        return true;
+                    }
+                }
+                return true;
+            }
+        }
         let (ox, _) = self.inventory_origin(&batch);
         // Clicking a crafting slot drops the ghost recipe (`slotClicked`).
         if let Some(slot) = self.slot_at(&batch, cursor.0, cursor.1)
@@ -690,25 +721,10 @@ impl Game<'_> {
                 .play("minecraft:ui.button.click", None, 0.25, 1.0);
             return true;
         }
-        if !self.book_open(book_type) || self.spectator() {
+        if !open {
             return covers;
         }
-        self.refresh_book_view(book_type);
         let (xo, yo) = self.book_origin(&batch);
-        // The alternatives overlay captures the click first.
-        if let Some(overlay) = self.recipe_ui.overlay.take() {
-            let maxrow = if overlay.entries.len() <= 16 { 4 } else { 5 };
-            for (n, (entry, _)) in overlay.entries.iter().enumerate() {
-                let x = overlay.x + 4.0 + 25.0 * (n % maxrow) as f32;
-                let y = overlay.y + 5.0 + 25.0 * (n / maxrow) as f32;
-                if !right && inside(cursor, x, y, 24.0, 24.0) {
-                    let shift = self.shift_down();
-                    self.place_from_book(book_type, *entry, shift);
-                    return true;
-                }
-            }
-            return true;
-        }
         let pages = self.recipe_ui.view.buttons.len().div_ceil(20);
         // Page arrows.
         if pages > 1 {

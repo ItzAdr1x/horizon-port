@@ -6392,11 +6392,10 @@ impl Game<'_> {
     fn inventory_press(&mut self, right: bool) {
         use horizon_client::container_screen::Target;
         use horizon_client::menu::Input;
-        // `AbstractRecipeBookScreen.mouseClicked`: a book covering the menu takes the press, used
-        // or not. Its release clicks nothing either, though vanilla's would reach the menu: a
-        // stack in hand would be thrown beyond the panel, or put in a slot a placement just
-        // uncovered.
-        if self.recipe_book_covers() {
+        // A book covering the menu or showing a recipe's alternatives takes the press, used or
+        // not. Its release clicks nothing either, though vanilla's would reach the menu: a stack
+        // in hand would be thrown beyond the panel, or put in a slot a placement just uncovered.
+        if self.recipe_book_takes_pointer() {
             self.inv.clicks.skip_release();
             self.recipe_book_click(right);
             return;
@@ -6573,6 +6572,9 @@ impl Game<'_> {
         };
         if !self.inventory_open() {
             return PlaceResult::Ended;
+        }
+        if self.recipe_book_takes_pointer() {
+            return PlaceResult::Blocked;
         }
         let Some(slot) = self.slot_at(
             &batch,
@@ -6789,6 +6791,13 @@ impl Game<'_> {
     /// over it, by its mouse button or a touch's long press on a creative item.
     pub(super) fn inventory_pick(&mut self, down: bool) {
         if !self.inventory_open() {
+            return;
+        }
+        // The book takes this button as it takes the others: the alternatives hide, and nothing
+        // under them is cloned.
+        if down && self.recipe_book_takes_pointer() {
+            self.inv.clicks.skip_release();
+            self.recipe_book_hide_alternatives();
             return;
         }
         if down {
