@@ -221,7 +221,7 @@ impl Game<'_> {
         };
         Context {
             mode,
-            scene: self.scene(),
+            scene: super::scene_id(self.scene()),
             movement: self.settings.controller.touch_movement,
             flying: self.player.as_ref().is_some_and(|p| p.flying),
             held_item_used_over_time: self.held_item_used_over_time(),

@@ -431,11 +431,13 @@ def grab(game):
     game.raw('mouse-move', -1, 0)
 
 
-def host_unaffected(host, what):
-    """What a guest opens is the guest's: the host keeps its world on screen and its mouse look (#687)."""
+def host_unaffected(host, what, scene):
+    """What a guest opens is the guest's: the host keeps its world on screen, its mouse look (#687)
+    and its scene (`scene` before), whose change would end what its fingers and clicks were doing."""
     state = host('state')
     assert state.get('screen') == 'playing', f'{what} opened the {state.get("screen")} screen on the host'
     assert state.get('pointer_grabbed'), f"{what} released the host's pointer"
+    assert state.get('scene') == scene, f"{what} changed the host's scene"
 
 
 def lid(game, pos):
@@ -448,10 +450,11 @@ def check_chest(host, guest, out):
     guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:chest')
     guest.wait(10)
     grab(host)
+    scene = host('state')['scene']
     guest.raw('interact', *chest)
     screen = guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
     guest.wait(20)
-    host_unaffected(host, "the guest's chest")
+    host_unaffected(host, "the guest's chest", scene)
     opened = {'guest': lid(guest, chest), 'host': lid(host, chest)}
     host.raw('look-at', chest[0] + 0.5, chest[1] + 0.5, chest[2] + 0.5)
     host.wait(2)
@@ -492,9 +495,10 @@ def check_crafting(host, guest, out):
     guest('command', command=f'setblock {table[0]} {table[1]} {table[2]} minecraft:crafting_table')
     guest.wait(10)
     grab(host)
+    scene = host('state')['scene']
     guest.raw('interact', *table)
     guest.raw('wait-for', 'screen', 'inventory', '--timeout', 10)
-    host_unaffected(host, "the guest's crafting table")
+    host_unaffected(host, "the guest's crafting table", scene)
     size = guest('screen').get('craft_size')
     assert size == 3, f'the crafting table opened a {size}x{size} grid'
     # Two planks one above the other in the 3x3 grid: four sticks.
@@ -522,12 +526,13 @@ def check_sign(host, guest, out):
     guest('command', command='give @s minecraft:oak_sign 1')
     guest.wait(10)
     grab(host)
+    scene = host('state')['scene']
     guest.raw('place', *spot, '--item', 'minecraft:oak_sign')
     guest.wait(20)
     placed = host.raw('block', *spot).get('block')
     host.shot(out, 'sign')
     assert placed and 'sign' in placed, f'the guest placed {placed}'
-    host_unaffected(host, "the guest's sign")
+    host_unaffected(host, "the guest's sign", scene)
     return placed
 
 

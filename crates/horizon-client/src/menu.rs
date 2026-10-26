@@ -247,6 +247,7 @@ enum Role {
 
 impl Role {
     /// A result or output: `mayPlace` refuses every stack, and a take crafts, trades or smelts.
+    #[cfg(test)]
     fn output(self) -> bool {
         matches!(
             self,
@@ -1262,7 +1263,17 @@ impl Menu {
 
     fn may_place(&self, env: &Env, s: usize, stack: &ItemStack) -> bool {
         match self.slots[s].role {
-            role if role.output() => false,
+            // `Slot.mayPlace`.
+            Role::Plain | Role::CreativeDisplay | Role::EnchantItem => true,
+            Role::Output
+            | Role::CraftResult
+            | Role::Inert
+            | Role::LoomResult
+            | Role::MerchantResult
+            | Role::StoneResult
+            | Role::GrindResult
+            | Role::CombineResult
+            | Role::CartoResult => false,
             Role::Armor(eq) => env
                 .items
                 .get(&stack.item)
@@ -1319,8 +1330,6 @@ impl Menu {
                 .is_some_and(|t| t.contains(&*stack.item)),
             Role::CartoMap => stack.data().is_some_and(|d| d.map_id.is_some()),
             Role::CartoExtra => Self::is_carto_extra(stack),
-            // `Slot.mayPlace`.
-            _ => true,
         }
     }
 
@@ -3082,38 +3091,104 @@ pub(crate) mod tests {
         test(&env, &mut menu);
     }
 
+    /// One menu of each kind.
+    const KINDS: [Kind; 22] = [
+        Kind::Inventory,
+        Kind::Crafting,
+        Kind::Chest(3),
+        Kind::Hopper,
+        Kind::Dispenser,
+        Kind::Shulker,
+        Kind::Furnace("smelting"),
+        Kind::Brewing,
+        Kind::Crafter,
+        Kind::CrafterBlock,
+        Kind::Loom,
+        Kind::Stonecutter,
+        Kind::Grindstone,
+        Kind::Anvil,
+        Kind::Smithing,
+        Kind::Enchanting,
+        Kind::Beacon,
+        Kind::Cartography,
+        Kind::Lectern,
+        Kind::Merchant,
+        Kind::Mount(5),
+        Kind::ItemPicker,
+    ];
+
     #[test]
     fn the_outputs_are_each_menus_result_slot() {
-        for kind in [
-            Kind::Inventory,
-            Kind::Crafting,
-            Kind::Chest(3),
-            Kind::Hopper,
-            Kind::Dispenser,
-            Kind::Shulker,
-            Kind::Furnace("smelting"),
-            Kind::Brewing,
-            Kind::Crafter,
-            Kind::CrafterBlock,
-            Kind::Loom,
-            Kind::Stonecutter,
-            Kind::Grindstone,
-            Kind::Anvil,
-            Kind::Smithing,
-            Kind::Enchanting,
-            Kind::Beacon,
-            Kind::Cartography,
-            Kind::Lectern,
-            Kind::Merchant,
-            Kind::Mount(5),
-            Kind::ItemPicker,
-        ] {
+        for kind in KINDS {
             let menu = Menu::new(kind);
             let outputs: Vec<usize> = (0..menu.slot_count())
                 .filter(|&i| menu.slots[i].role.output())
                 .collect();
             assert_eq!(outputs, Vec::from_iter(kind.output()), "{kind:?}");
         }
+    }
+
+    #[test]
+    fn nothing_is_put_on_an_output() {
+        with_menu(Kind::Inventory, |env, inventory| {
+            let stone = stack("stone", 1).unwrap();
+            assert!(inventory.may_place(env, 9, &stone));
+            for kind in KINDS {
+                let menu = Menu::new(kind);
+                for s in (0..menu.slot_count()).filter(|&s| menu.slots[s].role.output()) {
+                    for item in [
+                        "stone",
+                        "oak_planks",
+                        "lapis_lazuli",
+                        "paper",
+                        "white_banner",
+                    ] {
+                        let stack = stack(item, 1).unwrap();
+                        assert!(!menu.may_place(env, s, &stack), "{kind:?} slot {s}: {item}");
+                    }
+                }
+            }
+        });
+    }
+
+    /// The crafter's result is a `NonInteractiveResultSlot`, which nothing takes from: a double
+    /// click on it with a stack in hand (PICKUP, then PICKUP_ALL) gathers that item from the other
+    /// slots, and a Shift double click (QUICK_MOVE, then one for each stack of the result's own
+    /// container) moves nothing.
+    #[test]
+    fn a_double_click_on_the_crafters_result_takes_nothing_from_it() {
+        let fill = |env: &Env, menu: &mut Menu| {
+            menu.set_slot(env, 0, stack("oak_log", 1));
+            menu.set_slot(env, 20, stack("oak_planks", 5));
+            menu.set_slot(env, 30, stack("oak_log", 3));
+            menu.settle(env);
+            assert_eq!(menu.slot(45), stack("oak_planks", 4).as_ref());
+        };
+        with_menu(Kind::CrafterBlock, |env, menu| {
+            menu.creative = false;
+            fill(env, menu);
+            menu.carried = stack("oak_planks", 10);
+            menu.click(env, 45, 0, Input::Pickup).unwrap();
+            assert_eq!(menu.carried, stack("oak_planks", 10));
+            menu.click(env, 45, 0, Input::PickupAll).unwrap();
+            assert_eq!(menu.carried, stack("oak_planks", 15));
+            assert_eq!(menu.slot(20), None);
+            assert_eq!(menu.slot(0), stack("oak_log", 1).as_ref());
+            assert_eq!(menu.slot(30), stack("oak_log", 3).as_ref());
+            assert_eq!(menu.slot(45), stack("oak_planks", 4).as_ref());
+        });
+        with_menu(Kind::CrafterBlock, |env, menu| {
+            menu.creative = false;
+            fill(env, menu);
+            menu.click(env, 45, 0, Input::QuickMove).unwrap();
+            let moved = menu.slot(45).cloned().unwrap();
+            menu.quick_move_all(env, 45, &moved).unwrap();
+            assert_eq!(menu.carried, None);
+            assert_eq!(menu.slot(0), stack("oak_log", 1).as_ref());
+            assert_eq!(menu.slot(20), stack("oak_planks", 5).as_ref());
+            assert_eq!(menu.slot(30), stack("oak_log", 3).as_ref());
+            assert_eq!(menu.slot(45), stack("oak_planks", 4).as_ref());
+        });
     }
 
     /// `HorseInventoryMenu`: a shift-click wears horse armour, then saddles,

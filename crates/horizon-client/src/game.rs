@@ -255,7 +255,12 @@ fn scene_id(parts: impl std::hash::Hash) -> u64 {
 }
 
 /// The title screen's page, as scenes tell them apart.
-fn title_page(title: &Title) -> impl std::hash::Hash {
+type TitlePage = (
+    std::mem::Discriminant<horizon_client::title::Mode>,
+    Option<std::mem::Discriminant<horizon_client::multiplayer::Screen>>,
+);
+
+fn title_page(title: &Title) -> TitlePage {
     use horizon_client::title::Mode;
     let server_page = match &title.mode {
         Mode::Multiplayer(screen) => Some(std::mem::discriminant(screen)),
@@ -481,7 +486,7 @@ impl Options {
         Ok(Some(o))
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Screen {
     Playing,
     GameModeSwitcher,
@@ -1148,12 +1153,20 @@ fn select_creative_tab(
     clicks.skip_release();
 }
 
-/// What the screen shows, as an identity's parts (`Game::scene`).
-#[derive(Clone, Copy, Hash)]
+/// What the screen shows, as an identity (`Game::scene`): when it changes, fingers on the last
+/// one do nothing more.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Scene {
+    object: ScreenObject,
+    covers: Covers,
+}
+
+/// The vanilla `Screen` object under whatever covers it, as an identity: another one keeps
+/// nothing of the last one's clicks (`ScreenClicks`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ScreenObject {
     screen: Screen,
-    /// The title's page, and the sub-screen of a screen with its own, hashed.
-    view: u64,
+    view: Option<ScreenView>,
     /// The menu behind an inventory screen: its container block, its station, the server's
     /// window id, a mount's.
     container: Option<(i32, i32, i32)>,
@@ -1162,15 +1175,23 @@ struct Scene {
     mount: bool,
     /// Screens opened so far (`Game::screens_opened`).
     opened: u64,
-    covers: Covers,
+}
+
+/// Which sub-screen shows on a screen with sub-screens of its own (`OptionsUi::view`,
+/// `WorldOptions::view`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ScreenView {
+    Options(horizon_client::options_ui::View),
+    WorldOptions(Option<(lan_screen::View, bool)>),
 }
 
 /// What can cover a world's screen and take the mouse from it.
-#[derive(Clone, Copy, Default, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 struct Covers {
-    /// The title screen, with no world behind it.
-    title: bool,
-    /// A server's resource pack prompt (`PackConfirmScreen`).
+    /// The title screen's page, with no world behind it.
+    title: Option<TitlePage>,
+    /// A server's resource pack prompt (`PackConfirmScreen`): when it goes, the screen it covered
+    /// is the same one.
     pack_prompt: bool,
     book: bool,
     sign: bool,
@@ -1185,11 +1206,13 @@ fn inventory_takes_mouse(screen: Screen, covers: Covers) -> bool {
         sign,
     } = covers;
     matches!(screen, Screen::Inventory | Screen::Creative)
-        && !(title || pack_prompt || book || sign)
+        && !(title.is_some() || pack_prompt || book || sign)
 }
 
 /// What an inventory screen keeps between clicks, as vanilla keeps it on its `Screen` object:
-/// another scene (`Game::scene`) starts afresh.
+/// another one (`ScreenObject`) starts afresh. A cover coming and going leaves them, as vanilla's
+/// pack prompt returns to the same `AbstractContainerScreen`.
+#[derive(Default)]
 struct ScreenClicks {
     /// `AbstractContainerScreen`'s quick craft and skip-release state.
     clicks: horizon_client::container_screen::Clicks,
@@ -1200,24 +1223,22 @@ struct ScreenClicks {
     /// `lastQuickMoved`: what the last Shift click moved, which a Shift double click moves every
     /// stack of.
     last_quick_moved: Option<ItemStack>,
-    scene: u64,
+    /// The screen they are made on: none before the first.
+    object: Option<ScreenObject>,
 }
 
 impl ScreenClicks {
-    /// Those of a new screen, `scene`.
-    fn new(scene: u64) -> Self {
+    /// Those of a new screen, `object`.
+    fn new(object: ScreenObject) -> Self {
         Self {
-            clicks: horizon_client::container_screen::Clicks::new(),
-            drag: None,
-            last_click: None,
-            last_quick_moved: None,
-            scene,
+            object: Some(object),
+            ..Self::default()
         }
     }
     /// The clicks of `scene`, the one shown now.
-    fn follow(&mut self, scene: u64) {
-        if scene != self.scene {
-            *self = Self::new(scene);
+    fn follow(&mut self, scene: Scene) {
+        if self.object != Some(scene.object) {
+            *self = Self::new(scene.object);
         }
     }
 }
@@ -5591,20 +5612,19 @@ impl Game<'_> {
             self.draw_inventory_effects(batch, (ox, oy), 176);
         }
     }
-    /// What the screen shows, as an identity: the screen, the view of a screen with views of its
-    /// own (the title, the options, World Options), and the menu or container behind it. Another
-    /// one is another vanilla `Screen` object: what the last one kept between clicks is gone,
-    /// and fingers on it do nothing more.
-    pub(super) fn scene(&self) -> u64 {
+    /// What the screen shows, as an identity: the vanilla `Screen` object under any cover (the
+    /// screen, the view of a screen with views of its own, the menu or container behind it), and
+    /// what covers it.
+    pub(super) fn scene(&self) -> Scene {
         use std::mem::discriminant;
         // A screen whose own sub-screens Escape closes says which shows; a new screen decides.
         let view = match self.screen {
-            Screen::Options => scene_id(self.ui.options.view()),
-            Screen::WorldOptions => scene_id(
+            Screen::Options => Some(ScreenView::Options(self.ui.options.view())),
+            Screen::WorldOptions => Some(ScreenView::WorldOptions(
                 self.world_options
                     .as_ref()
                     .map(lan_screen::WorldOptions::view),
-            ),
+            )),
             Screen::Playing
             | Screen::GameModeSwitcher
             | Screen::Paused
@@ -5616,26 +5636,28 @@ impl Game<'_> {
             | Screen::Advancements
             | Screen::Friends
             | Screen::CommandBlock
-            | Screen::Win => 0,
+            | Screen::Win => None,
         };
-        scene_id(Scene {
-            screen: self.screen,
-            view: scene_id((self.title.as_ref().map(title_page), view)),
-            container: self.container,
-            station: self.station.as_ref().map(|s| discriminant(&s.kind)),
-            window: self
-                .remote
-                .as_ref()
-                .and_then(|r| r.menu.as_ref())
-                .map(|m| m.0),
-            mount: self.mount_active(),
-            opened: self.screens_opened,
+        Scene {
+            object: ScreenObject {
+                screen: self.screen,
+                view,
+                container: self.container,
+                station: self.station.as_ref().map(|s| discriminant(&s.kind)),
+                window: self
+                    .remote
+                    .as_ref()
+                    .and_then(|r| r.menu.as_ref())
+                    .map(|m| m.0),
+                mount: self.mount_active(),
+                opened: self.screens_opened,
+            },
             covers: self.covers(),
-        })
+        }
     }
     fn covers(&self) -> Covers {
         Covers {
-            title: self.title.is_some(),
+            title: self.title.as_ref().map(title_page),
             pack_prompt: self.server_packs.prompt.is_some(),
             book: self.book.is_some(),
             sign: self.sign_edit.is_some(),
@@ -6509,7 +6531,7 @@ impl Game<'_> {
     /// A press on an inventory taken back (a cancelled touch, or the scene changed under it):
     /// what it began is forgotten, and its release clicks nothing, as on a new screen.
     pub(super) fn inventory_abort(&mut self) {
-        self.inv = ScreenClicks::new(self.scene());
+        self.inv = ScreenClicks::new(self.scene().object);
     }
     /// Mouse movement while a quick craft drag is running.
     fn inventory_drag_move(&mut self) {
@@ -12019,7 +12041,7 @@ impl<'a> Game<'a> {
             carried: None,
             craft_grid: vec![None; 9],
             craft_size: 2,
-            inv: ScreenClicks::new(0),
+            inv: ScreenClicks::default(),
             screens_opened: 0,
             tweaks: Default::default(),
             touch_shift: None,
@@ -13843,9 +13865,26 @@ mod tests {
         shared::<PackResources>();
     }
 
+    /// A server's chest in window 2, under the key no block has, as the `opened`th screen opened.
+    fn chest(opened: u64) -> Scene {
+        Scene {
+            object: ScreenObject {
+                screen: Screen::Inventory,
+                view: None,
+                container: Some((i32::MIN, 0, 0)),
+                station: None,
+                window: Some(2),
+                mount: false,
+                opened,
+            },
+            covers: Covers::default(),
+        }
+    }
+
     #[test]
     fn another_scene_starts_the_inventory_clicks_afresh() {
-        let mut inv = ScreenClicks::new(1);
+        let mut inv = ScreenClicks::default();
+        inv.follow(chest(7));
         // A press holding a stack starts a quick craft drag over slot 3.
         let slot = Target::Slot(3usize);
         assert_eq!(
@@ -13855,10 +13894,11 @@ mod tests {
         inv.drag = Some((0, vec![3]));
         inv.last_click = Some((std::time::Instant::now(), 3, false));
         inv.last_quick_moved = Some(ItemStack::new("minecraft:oak_log", 20));
-        inv.follow(1);
+        inv.follow(chest(7));
         assert!(inv.clicks.quick_crafting().is_some());
         assert!(inv.drag.is_some() && inv.last_click.is_some() && inv.last_quick_moved.is_some());
-        inv.follow(2);
+        // The server's next chest in window 2, opened with no close between.
+        inv.follow(chest(8));
         assert_eq!(inv.clicks.quick_crafting(), None);
         assert!(inv.drag.is_none() && inv.last_click.is_none() && inv.last_quick_moved.is_none());
         // The button held across the change comes up on the next screen clicking nothing, though
@@ -13882,19 +13922,42 @@ mod tests {
     #[test]
     fn a_screen_opened_under_the_window_id_of_the_last_is_another_scene() {
         // A server's 9x3 chest in window 2, then, with no close between, its 9x6 chest in window
-        // 2: under the same key, which no block has.
-        let chest = Scene {
-            screen: Screen::Inventory,
-            view: 0,
-            container: Some((i32::MIN, 0, 0)),
-            station: None,
-            window: Some(2),
-            mount: false,
-            opened: 7,
-            covers: Covers::default(),
+        // 2, as the touch controls see them (`Context::scene`).
+        assert_eq!(scene_id(chest(7)), scene_id(chest(7)));
+        assert_ne!(scene_id(chest(8)), scene_id(chest(7)));
+    }
+
+    #[test]
+    fn a_cover_coming_and_going_keeps_the_inventory_clicks_but_not_the_fingers() {
+        let chest = chest(7);
+        let prompt = Scene {
+            covers: Covers {
+                pack_prompt: true,
+                ..chest.covers
+            },
+            ..chest
         };
-        assert_eq!(scene_id(chest), scene_id(Scene { ..chest }));
-        assert_ne!(scene_id(chest), scene_id(Scene { opened: 8, ..chest }));
+        let mut inv = ScreenClicks::default();
+        inv.follow(chest);
+        // A press holding a stack starts a quick craft drag over slot 3, and a server's pack
+        // prompt comes and goes before the release.
+        let slot = Target::Slot(3usize);
+        assert_eq!(
+            inv.clicks.press(&slot, Button::Left, false, false, false),
+            None
+        );
+        inv.drag = Some((0, vec![3]));
+        inv.follow(prompt);
+        inv.follow(chest);
+        assert!(inv.clicks.quick_crafting().is_some() && inv.drag.is_some());
+        // The release ends the drag: vanilla's prompt returns to the same screen object.
+        assert_eq!(
+            inv.clicks
+                .release(&slot, Button::Left, false, true, false, false),
+            Release::QuickCraft
+        );
+        // Fingers on the inventory do nothing more once the prompt covers it.
+        assert_ne!(scene_id(prompt), scene_id(chest));
     }
 
     #[test]
@@ -13905,7 +13968,10 @@ mod tests {
         assert!(!inventory_takes_mouse(Screen::Playing, clear));
         for covers in [
             Covers {
-                title: true,
+                title: Some((
+                    std::mem::discriminant(&horizon_client::title::Mode::Main),
+                    None,
+                )),
                 ..clear
             },
             Covers {
