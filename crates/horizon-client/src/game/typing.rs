@@ -152,8 +152,9 @@ fn show_keyboard(window: Option<&Window>, show: Option<bool>) {
 }
 
 impl Game<'_> {
-    /// The focused field, in the order `window_event` gives keys to the screens.
-    pub(super) fn typing_field(&self) -> Option<Field> {
+    /// The field of the screen that takes the keys, in the order `window_event` gives them to
+    /// the screens. The options', World Options' and the title's may not have the focus.
+    pub(super) fn front_field(&self) -> Option<Field> {
         if self.pending_entry.is_some()
             || self.world_loader.is_some()
             || self.pending_save.is_some()
@@ -180,16 +181,24 @@ impl Game<'_> {
             return Some(Field::Anvil);
         }
         match self.screen {
-            Screen::WorldOptions => self.world_options_typing().then_some(Field::WorldOptions),
+            Screen::WorldOptions => Some(Field::WorldOptions),
             Screen::Win => None,
             Screen::CommandBlock => Some(Field::CommandBlock),
-            Screen::Options => self.ui.options.typing().then_some(Field::Options),
-            _ => self
-                .title
-                .as_ref()
-                .is_some_and(|t| t.typing())
-                .then_some(Field::Title),
+            Screen::Options => Some(Field::Options),
+            _ => self.title.is_some().then_some(Field::Title),
         }
+    }
+
+    /// The focused field.
+    pub(super) fn typing_field(&self) -> Option<Field> {
+        let field = self.front_field()?;
+        let focused = match field {
+            Field::WorldOptions => self.world_options_typing(),
+            Field::Options => self.ui.options.typing(),
+            Field::Title => self.title.as_ref().is_some_and(|t| t.typing()),
+            _ => true,
+        };
+        focused.then_some(field)
     }
 
     /// An edit typed into the focused field. False with no field.
@@ -202,7 +211,7 @@ impl Game<'_> {
     }
 
     /// An edit typed into `field`, as the key that makes it would.
-    fn edit_field(&mut self, field: Field, edit: Edit) {
+    pub(super) fn edit_field(&mut self, field: Field, edit: Edit) {
         let (key, text) = match &edit {
             Edit::Text(text) => (None, Some(text.as_str())),
             Edit::Backspace => (Some(KeyCode::Backspace), None),

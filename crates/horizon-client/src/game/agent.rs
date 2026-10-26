@@ -3,7 +3,7 @@
 //! like a player (walk, look, break, place, use, click buttons). Actions that
 //! take time run as a task advanced every frame and reply when they finish or
 //! time out, so `horizon-ctl break 10 64 3` returns what the block dropped.
-use super::{Game, Screen, typing::Edit};
+use super::{Game, Screen};
 use horizon_client::{
     Result,
     block_entity_anim::Ticker,
@@ -514,7 +514,7 @@ impl Game<'_> {
         })
     }
 
-    fn title_value(&self) -> Value {
+    pub(super) fn title_value(&self) -> Value {
         use horizon_client::title::Mode;
         let Some(title) = &self.title else {
             return Value::Null;
@@ -1500,76 +1500,6 @@ impl Game<'_> {
                 };
                 self.synth_click(event_loop, x, y, button)?;
                 ok(json!({ "ok": true, "screen": self.screen_label() }))
-            }
-            "type" if self.title.is_some() => {
-                // type [--field name|seed] [--replace] TEXT on the title screens.
-                let mut text = line
-                    .trim_start()
-                    .strip_prefix("type")
-                    .unwrap_or("")
-                    .strip_prefix(' ')
-                    .unwrap_or("");
-                let mut field = None;
-                let mut replace = false;
-                loop {
-                    if let Some(rest) = text.strip_prefix("--replace") {
-                        replace = true;
-                        text = rest.trim_start();
-                    } else if let Some(rest) = text.strip_prefix("--field") {
-                        let rest = rest.trim_start();
-                        let (name, rest) = rest.split_once(' ').unwrap_or((rest, ""));
-                        field = Some(name.to_owned());
-                        text = rest;
-                    } else {
-                        break;
-                    }
-                }
-                let title = self.title.as_mut().ok_or("no title screen")?;
-                if let Some(field) = &field {
-                    match &mut title.mode {
-                        horizon_client::title::Mode::Create { focus, options, .. } => {
-                            // Each box is on its own tab.
-                            *focus = match field.as_str() {
-                                "name" => {
-                                    options.tab = 0;
-                                    0
-                                }
-                                "seed" => {
-                                    options.tab = 1;
-                                    1
-                                }
-                                other => {
-                                    return Err(format!(
-                                        "the create-world fields are name and seed, not {other}"
-                                    )
-                                    .into());
-                                }
-                            }
-                        }
-                        horizon_client::title::Mode::Edit { focused, .. } if field == "name" => {
-                            *focused = true
-                        }
-                        _ => {
-                            return Err(
-                                "--field works on the create-world or edit-world screen".into()
-                            );
-                        }
-                    }
-                }
-                if replace {
-                    for _ in 0..64 {
-                        title.backspace();
-                    }
-                }
-                let edit = if text == "\\b" {
-                    Edit::Backspace
-                } else {
-                    Edit::Text(text.to_owned())
-                };
-                if !self.type_into_field(edit) {
-                    return Err("type needs a text field with the focus (--field name|seed)".into());
-                }
-                ok(json!({ "ok": true, "menu": self.title_value() }))
             }
             "command" => {
                 self.need_world()?;

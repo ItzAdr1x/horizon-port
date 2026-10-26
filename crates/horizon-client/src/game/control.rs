@@ -3,7 +3,11 @@ use super::{
     Game, Screen,
     typing::{Edit, Field},
 };
-use horizon_client::{Result, items::ItemStack};
+use horizon_client::{
+    Result,
+    items::ItemStack,
+    title::{Mode, Title},
+};
 use horizon_core::geometry::Vec3;
 use serde_json::{Value, json};
 use std::{
@@ -32,7 +36,7 @@ const HELP: &[&str] = &[
     "resume                         leave the pause menu",
     "screenshot PATH                write the next frame as PNG",
     "chat TEXT                      send a chat line or /command as if typed",
-    "type TEXT                      type into the focused text field (\\b deletes one character)",
+    "type [--field name|seed] [--replace] TEXT  type into the focused text field (\\b deletes one character); --field focuses a create-world box, --replace clears the field first",
     "keyboard [show]                the system keyboard: the focused field, wanted, shown; show asks for it",
     "chat-log [N]                   the newest N chat messages (default 10)",
     "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs mods graphics graphics-advanced)",
@@ -536,25 +540,24 @@ impl Game<'_> {
                 ))
             }
             "type" => {
-                self.require_world()?;
-                let text = line
-                    .trim_start()
-                    .strip_prefix("type")
-                    .unwrap_or("")
-                    .strip_prefix(' ')
-                    .unwrap_or("");
-                let field = self.typing_field().ok_or(
-                    "type needs a text field with the focus: the chat (key t tap), a sign or book, a search box, the anvil, a command block or World Options",
-                )?;
-                match (field, text) {
-                    (_, "\\b") => {
-                        self.type_into_field(Edit::Backspace);
+                let args = TypeArgs::parse(line);
+                let field = type_target(self.front_field(), self.typing_field(), args.field)?;
+                if let Some(name) = args.field {
+                    focus_title_field(self.title.as_mut().ok_or("no title screen")?, name)?;
+                }
+                if args.replace {
+                    for _ in 0..64 {
+                        self.edit_field(field, Edit::Backspace);
                     }
+                }
+                match (field, args.text) {
+                    (_, "\\b") => self.edit_field(field, Edit::Backspace),
                     // On a book's page, \n is a line break.
-                    (Field::Book, _) => self.book_type(text),
-                    _ => {
-                        self.type_into_field(Edit::Text(text.to_owned()));
-                    }
+                    (Field::Book, text) => self.book_type(text),
+                    (_, text) => self.edit_field(field, Edit::Text(text.to_owned())),
+                }
+                if self.title.is_some() {
+                    return Ok(Some(json!({ "ok": true, "menu": self.title_value() })));
                 }
                 ok()
             }
@@ -997,6 +1000,71 @@ impl Game<'_> {
     }
 }
 
+/// `type [--field name|seed] [--replace] TEXT`.
+struct TypeArgs<'a> {
+    field: Option<&'a str>,
+    replace: bool,
+    text: &'a str,
+}
+
+impl<'a> TypeArgs<'a> {
+    fn parse(line: &'a str) -> Self {
+        let mut args = TypeArgs {
+            field: None,
+            replace: false,
+            text: line
+                .trim_start()
+                .strip_prefix("type")
+                .unwrap_or("")
+                .strip_prefix(' ')
+                .unwrap_or(""),
+        };
+        loop {
+            if let Some(rest) = args.text.strip_prefix("--replace") {
+                args.replace = true;
+                args.text = rest.trim_start();
+            } else if let Some(rest) = args.text.strip_prefix("--field") {
+                let rest = rest.trim_start();
+                let (name, rest) = rest.split_once(' ').unwrap_or((rest, ""));
+                args.field = Some(name);
+                args.text = rest;
+            } else {
+                return args;
+            }
+        }
+    }
+}
+
+/// The field `type` changes, from the field in front and the focused one, decided before it
+/// changes anything: `--field` focuses one of the title's boxes, so the title must take the keys.
+fn type_target(front: Option<Field>, focused: Option<Field>, field: Option<&str>) -> Result<Field> {
+    match field {
+        Some(_) if front == Some(Field::Title) => Ok(Field::Title),
+        Some(_) => Err("--field works on the create-world or edit-world screen".into()),
+        None => focused.ok_or_else(|| {
+            "type needs a text field with the focus: the chat (key t tap), a sign or book, a search box, the anvil, a command block, World Options or a title screen's field (--field name|seed)".into()
+        }),
+    }
+}
+
+/// `type --field`: the create-world screen's name or seed box, each on its own tab, or the
+/// edit-world screen's name. An error changes nothing.
+fn focus_title_field(title: &mut Title, name: &str) -> Result<()> {
+    match (&mut title.mode, name) {
+        (Mode::Create { focus, options, .. }, "name" | "seed") => {
+            let index = u8::from(name == "seed");
+            *focus = index;
+            options.tab = usize::from(index);
+        }
+        (Mode::Create { .. }, other) => {
+            return Err(format!("the create-world fields are name and seed, not {other}").into());
+        }
+        (Mode::Edit { focused, .. }, "name") => *focused = true,
+        _ => return Err("--field works on the create-world or edit-world screen".into()),
+    }
+    Ok(())
+}
+
 /// PCI vendor IDs of the GPU makers players have (Apple's is wgpu's Metal value).
 fn vendor_name(id: u32) -> String {
     match id {
@@ -1087,4 +1155,61 @@ fn key_code(name: &str) -> Option<KeyCode> {
         "down" => KeyCode::ArrowDown,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_parses_its_flags_before_the_text() {
+        let args = TypeArgs::parse("type --field name --replace Agent World");
+        assert_eq!(
+            (args.field, args.replace, args.text),
+            (Some("name"), true, "Agent World")
+        );
+        let args = TypeArgs::parse("type /say hi");
+        assert_eq!(
+            (args.field, args.replace, args.text),
+            (None, false, "/say hi")
+        );
+    }
+
+    #[test]
+    fn type_refuses_before_it_changes_anything() {
+        // The options over the title take the keys: --field must not focus a box behind them.
+        assert!(type_target(Some(Field::Options), Some(Field::Options), Some("name")).is_err());
+        assert!(type_target(Some(Field::Chat), Some(Field::Chat), Some("name")).is_err());
+        assert!(type_target(None, None, None).is_err());
+        assert_eq!(
+            type_target(Some(Field::Title), None, Some("seed")).unwrap(),
+            Field::Title
+        );
+        assert_eq!(
+            type_target(Some(Field::Options), Some(Field::Options), None).unwrap(),
+            Field::Options
+        );
+
+        let root = std::env::temp_dir().join(format!("horizon-ctl-type-{}", std::process::id()));
+        let mut title = Title::new(root.join("saves"), &root);
+        assert!(focus_title_field(&mut title, "name").is_err());
+        assert!(matches!(title.mode, Mode::Main));
+        title.mode = Mode::Create {
+            name: String::new(),
+            seed: String::new(),
+            creative: false,
+            focus: 2,
+            options: Default::default(),
+        };
+        assert!(focus_title_field(&mut title, "colour").is_err());
+        let Mode::Create { focus, options, .. } = &title.mode else {
+            unreachable!()
+        };
+        assert_eq!((*focus, options.tab), (2, 0));
+        focus_title_field(&mut title, "seed").unwrap();
+        let Mode::Create { focus, options, .. } = &title.mode else {
+            unreachable!()
+        };
+        assert_eq!((*focus, options.tab), (1, 1));
+    }
 }
