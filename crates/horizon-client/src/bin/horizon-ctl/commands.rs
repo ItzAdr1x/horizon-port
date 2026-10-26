@@ -372,8 +372,8 @@ pub const COMMANDS: &[Cmd] = &[
         ["horizon-ctl drag-at 130 100 148 100 166 100", "horizon-ctl drag-at right 130 100 148 100"], &[p("points", Ty::Rest, "right, then GUI x y pairs")], mcp: true, local: false),
     cmd!("scroll-at", Screens, "scroll-at X Y STEPS", "turn the mouse wheel at GUI pixel X Y (positive scrolls up)", "",
         ["horizon-ctl scroll-at 130 100 -1"], &[p("x", Ty::Num, "GUI x"), p("y", Ty::Num, "GUI y"), p("steps", Ty::Num, "wheel steps")], mcp: true, local: false),
-    cmd!("type", Screens, "type [--field name|seed] [--replace] TEXT", "type into the focused text field (chat box, world name, anvil, sign...)",
-        "--field name|seed focuses that box of the title's create-world screen (name on the edit-world screen), --replace clears the field first, and type \\b deletes one character. A refused command changes nothing.",
+    cmd!("type", Screens, "type [--field name|seed] [--replace] [--] TEXT", "type into the focused text field (chat box, world name, anvil, sign...)",
+        "--field name|seed focuses that box of the title's create-world screen (name on the edit-world screen), --replace clears the field first, -- ends the options for text that starts with --, and type \\b deletes one character. A refused command changes nothing.",
         ["horizon-ctl type hello everyone", "horizon-ctl type --field name --replace Agent World", "horizon-ctl type --field seed 12345"], &[flag("field", Ty::Enum(&["name", "seed"]), "create-world field to type into"), flag("replace", Ty::Bool, "clear the field first"), p("text", Ty::Rest, "text to type")], mcp: true, local: false),
     cmd!("keyboard", Screens, "keyboard [show]", "the system keyboard (iOS): the focused text field, and whether the keyboard is wanted and shown",
         "show asks for it, as a tap on the field does. Chat, signs, books and command blocks open it themselves. On other platforms, shown is what iOS would show.",
@@ -706,6 +706,10 @@ pub fn line_for(c: &Cmd, args: &Value) -> Result<Vec<String>, String> {
     }
     // Options go before free text, which runs to the end of the line.
     words.extend(flags);
+    // `type` reads options from the front of its text: `--` keeps text that starts like one.
+    if c.name == "type" && rest.as_deref().is_some_and(|t| t.starts_with("--")) {
+        words.push("--".to_owned());
+    }
     words.extend(rest);
     Ok(words)
 }
@@ -795,6 +799,15 @@ mod tests {
         assert_eq!(
             line_for(slot, &json!({ "slot": 200, "shift": true })).unwrap(),
             ["click-slot", "200", "shift"]
+        );
+        let typing = find("type").unwrap();
+        assert_eq!(
+            line_for(typing, &json!({ "replace": true, "text": "--field seed" })).unwrap(),
+            ["type", "--replace", "--", "--field seed"]
+        );
+        assert_eq!(
+            line_for(typing, &json!({ "field": "seed", "text": "5" })).unwrap(),
+            ["type", "--field", "seed", "5"]
         );
         let open = find("open").unwrap();
         assert!(

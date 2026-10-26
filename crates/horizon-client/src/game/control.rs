@@ -36,7 +36,7 @@ const HELP: &[&str] = &[
     "resume                         leave the pause menu",
     "screenshot PATH                write the next frame as PNG",
     "chat TEXT                      send a chat line or /command as if typed",
-    "type [--field name|seed] [--replace] TEXT  type into the focused text field (\\b deletes one character); --field focuses a create-world box, --replace clears the field first",
+    "type [--field name|seed] [--replace] [--] TEXT  type into the focused text field (\\b deletes one character); --field focuses a create-world box, --replace clears the field first, -- ends the options",
     "keyboard [show]                the system keyboard: the focused field, wanted, shown; show asks for it",
     "chat-log [N]                   the newest N chat messages (default 10)",
     "options [PAGE]                 open the options (video sound controls keybinds mouse chat accessibility language font packs mods graphics graphics-advanced)",
@@ -1000,7 +1000,7 @@ impl Game<'_> {
     }
 }
 
-/// `type [--field name|seed] [--replace] TEXT`.
+/// `type [--field name|seed] [--replace] [--] TEXT`.
 struct TypeArgs<'a> {
     field: Option<&'a str>,
     replace: bool,
@@ -1008,29 +1008,41 @@ struct TypeArgs<'a> {
 }
 
 impl<'a> TypeArgs<'a> {
+    /// The options are whole words before the text, and `--` ends them.
     fn parse(line: &'a str) -> Self {
         let mut args = TypeArgs {
             field: None,
             replace: false,
-            text: line
-                .trim_start()
-                .strip_prefix("type")
-                .unwrap_or("")
-                .strip_prefix(' ')
-                .unwrap_or(""),
+            text: "",
         };
+        let mut rest = line
+            .trim_start()
+            .strip_prefix("type")
+            .unwrap_or("")
+            .strip_prefix(' ')
+            .unwrap_or("");
         loop {
-            if let Some(rest) = args.text.strip_prefix("--replace") {
-                args.replace = true;
-                args.text = rest.trim_start();
-            } else if let Some(rest) = args.text.strip_prefix("--field") {
-                let rest = rest.trim_start();
-                let (name, rest) = rest.split_once(' ').unwrap_or((rest, ""));
-                args.field = Some(name);
-                args.text = rest;
-            } else {
-                return args;
-            }
+            let (word, after) = rest.split_once(' ').unwrap_or((rest, ""));
+            let after = after.trim_start();
+            rest = match word {
+                "--replace" => {
+                    args.replace = true;
+                    after
+                }
+                "--field" => {
+                    let (name, after) = after.split_once(' ').unwrap_or((after, ""));
+                    args.field = Some(name);
+                    after.trim_start()
+                }
+                "--" => {
+                    args.text = rest.strip_prefix("-- ").unwrap_or("");
+                    return args;
+                }
+                _ => {
+                    args.text = rest;
+                    return args;
+                }
+            };
         }
     }
 }
@@ -1162,17 +1174,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn type_parses_its_flags_before_the_text() {
-        let args = TypeArgs::parse("type --field name --replace Agent World");
+    fn type_takes_whole_option_words_before_the_text_and_none_after_dash_dash() {
+        let parse = |line| {
+            let args = TypeArgs::parse(line);
+            (args.field, args.replace, args.text)
+        };
         assert_eq!(
-            (args.field, args.replace, args.text),
+            parse("type --field name --replace Agent World"),
             (Some("name"), true, "Agent World")
         );
-        let args = TypeArgs::parse("type /say hi");
+        assert_eq!(parse("type /say hi"), (None, false, "/say hi"));
+        assert_eq!(parse("type --replacement"), (None, false, "--replacement"));
+        assert_eq!(parse("type --fieldx seed"), (None, false, "--fieldx seed"));
         assert_eq!(
-            (args.field, args.replace, args.text),
-            (None, false, "/say hi")
+            parse("type --replace -- --field seed"),
+            (None, true, "--field seed")
         );
+        assert_eq!(parse("type --  two  spaces"), (None, false, " two  spaces"));
+        assert_eq!(parse("type --"), (None, false, ""));
     }
 
     #[test]
