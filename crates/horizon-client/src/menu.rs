@@ -247,7 +247,6 @@ enum Role {
 
 impl Role {
     /// A result or output: `mayPlace` refuses every stack, and a take crafts, trades or smelts.
-    #[cfg(test)]
     fn output(self) -> bool {
         matches!(
             self,
@@ -300,6 +299,7 @@ const RESULT: usize = 3;
 const CONTAINER_MAX: u32 = 99;
 const OFFHAND: usize = 40;
 
+#[derive(Clone)]
 pub struct Menu {
     kind: Kind,
     slots: Vec<Slot>,
@@ -2806,6 +2806,43 @@ impl Menu {
             && self.can_drag_to(s)
     }
 
+    /// Whether a right click on slot `s` (PICKUP 1) would put exactly one carried item there and
+    /// change no other slot: the click, run on a copy. Every rule is the click's own, so a full
+    /// stack, another item (a swap), a bundle on either side, a result and a slot that refuses
+    /// the item all answer false. Only a result its inputs make may change (the crafting grid's
+    /// recipe). A creative tab's display slots are clicked by the screen, not the menu.
+    pub fn would_place_one(&self, env: &Env, s: usize) -> bool {
+        let Some(carried) = self.carried.as_ref() else {
+            return false;
+        };
+        if s >= self.slots.len() || self.slots[s].role == Role::CreativeDisplay {
+            return false;
+        }
+        let mut after = self.clone();
+        if after.click(env, s as i32, 1, Input::Pickup).is_err() {
+            return false;
+        }
+        let one_less = match &after.carried {
+            None => carried.count == 1,
+            Some(left) => {
+                left.count + 1 == carried.count && left.same_item_same_components(carried)
+            }
+        };
+        let grown = |was: u32| {
+            after
+                .slot(s)
+                .is_some_and(|now| now.same_item_same_components(carried) && now.count == was + 1)
+        };
+        let one_more = match self.slot(s) {
+            None => grown(0),
+            Some(was) => was.same_item_same_components(carried) && grown(was.count),
+        };
+        let rest = (0..self.slots.len())
+            .filter(|&i| i != s && !self.slots[i].role.output())
+            .all(|i| after.slot(i) == self.slot(i));
+        one_less && one_more && rest
+    }
+
     /// What a quick craft drag of type `ty` over `slots` shows
     /// (`AbstractContainerScreen.extractSlot` and
     /// `recalculateQuickCraftRemaining`): each slot's would-be count and
@@ -3319,6 +3356,91 @@ pub(crate) mod tests {
             let (shown, left) = menu.quick_craft_preview(env, 1, &[9, 10]).unwrap();
             assert_eq!(shown, vec![Some((1, false)), Some((61, false))]);
             assert_eq!(left, 18);
+        });
+    }
+
+    #[test]
+    fn one_is_placed_on_an_empty_slot_or_the_same_item_with_room() {
+        with_menu(Kind::Inventory, |env, menu| {
+            menu.creative = false;
+            // 9 is the first main inventory slot, 5 the head.
+            menu.carried = stack("stone", 5);
+            menu.set_slot(env, 10, stack("stone", 3));
+            menu.set_slot(env, 11, stack("stone", 64));
+            menu.set_slot(env, 12, stack("dirt", 3));
+            assert!(menu.would_place_one(env, 9));
+            assert!(menu.would_place_one(env, 10));
+            assert!(!menu.would_place_one(env, 11), "a full stack");
+            assert!(!menu.would_place_one(env, 12), "a swap");
+            assert!(!menu.would_place_one(env, 5), "stone on the head");
+            assert!(!menu.would_place_one(env, 0), "the result");
+            assert_eq!(menu.carried, stack("stone", 5));
+            assert_eq!(menu.slot(9), None);
+            assert_eq!(menu.slot(10), stack("stone", 3).as_ref());
+            assert_eq!(menu.slot(12), stack("dirt", 3).as_ref());
+            menu.carried = stack("iron_helmet", 1);
+            assert!(menu.would_place_one(env, 5));
+            menu.carried = None;
+            assert!(!menu.would_place_one(env, 9));
+        });
+    }
+
+    #[test]
+    fn a_bundle_in_hand_or_in_the_slot_places_none() {
+        with_menu(Kind::Inventory, |env, menu| {
+            menu.creative = false;
+            let mut bundle = stack("bundle", 1).unwrap();
+            bundle.data_mut().bundle_contents = vec![stack("dirt", 2).unwrap()];
+            menu.carried = Some(bundle.clone());
+            assert!(!menu.would_place_one(env, 9));
+            // The click itself takes the dirt out onto the slot.
+            menu.click(env, 9, 1, Input::Pickup).unwrap();
+            assert_eq!(menu.slot(9), stack("dirt", 2).as_ref());
+            menu.set_slot(env, 10, Some(bundle.clone()));
+            menu.carried = stack("stone", 5);
+            assert!(!menu.would_place_one(env, 10));
+            // A bundle takes items with the left button only: the right one swaps.
+            menu.click(env, 10, 1, Input::Pickup).unwrap();
+            assert_eq!(menu.carried, Some(bundle));
+            assert_eq!(menu.slot(10), stack("stone", 5).as_ref());
+        });
+    }
+
+    #[test]
+    fn a_slot_that_refuses_the_item_takes_none() {
+        with_menu(Kind::Furnace("smelting"), |env, menu| {
+            menu.creative = false;
+            // 0 the input, 1 the fuel, 2 the result.
+            menu.carried = stack("stone", 5);
+            assert!(menu.would_place_one(env, 0));
+            assert!(!menu.would_place_one(env, 1), "stone burns no furnace");
+            assert!(!menu.would_place_one(env, 2));
+            menu.carried = stack("coal", 5);
+            assert!(menu.would_place_one(env, 1));
+        });
+        with_menu(Kind::CrafterBlock, |env, menu| {
+            menu.creative = false;
+            menu.carried = stack("oak_log", 5);
+            menu.set_slot_state(0, false);
+            assert!(!menu.would_place_one(env, 0), "a disabled crafter slot");
+            assert!(menu.would_place_one(env, 1));
+        });
+        with_picker("dirt", |env, menu| {
+            menu.carried = stack("dirt", 5);
+            assert!(!menu.would_place_one(env, 3), "a creative tab's copy");
+            assert!(menu.would_place_one(env, 45), "the hotbar under it");
+        });
+    }
+
+    #[test]
+    fn one_log_in_the_crafting_grid_may_change_its_result() {
+        with_menu(Kind::Inventory, |env, menu| {
+            menu.creative = false;
+            menu.carried = stack("oak_log", 3);
+            assert!(menu.would_place_one(env, 1));
+            menu.click(env, 1, 1, Input::Pickup).unwrap();
+            assert_eq!(menu.slot(0), stack("oak_planks", 4).as_ref());
+            assert_eq!(menu.carried, stack("oak_log", 2));
         });
     }
 
