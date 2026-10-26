@@ -139,6 +139,7 @@ once a finger first touches the screen.
 | Hotbar | Tap or slide to select a slot |
 | ••• beside the hotbar | The inventory |
 | II (top right) | Pause |
+| Speech bubble (left of II) | Opens chat |
 
 Options > Horizon Settings > Controller Settings > **Touch Movement** swaps the D-pad for a
 joystick that appears where the left thumb lands and sprints pushed all the way forward. Controls'

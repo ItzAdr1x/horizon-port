@@ -184,6 +184,7 @@ impl Role {
         match *self {
             Role::Button(Button::Jump) => Some("key.jump"),
             Role::Button(Button::Inventory) => Some("key.inventory"),
+            Role::Button(Button::Chat) => Some("key.chat"),
             Role::Descend => Some("key.sneak"),
             Role::Look { holding, .. } => holding,
             _ => None,
@@ -334,7 +335,7 @@ impl Touch {
 
     fn land(&mut self, layout: &Layout, at: [f64; 2], now: Instant, out: &mut Vec<Input>) -> Role {
         let px = [at[0] as f32, at[1] as f32];
-        for button in [Button::Jump, Button::Inventory, Button::Pause] {
+        for button in [Button::Jump, Button::Inventory, Button::Pause, Button::Chat] {
             if layout.on(button, px) {
                 let role = Role::Button(button);
                 match role.holds() {
@@ -859,6 +860,22 @@ mod tests {
         assert_eq!(
             touch.finger(&layout, 3, Phase::Start, pause, ms(150)),
             [Input::Back]
+        );
+    }
+
+    #[test]
+    fn the_chat_button_presses_key_chat() {
+        let (mut touch, layout, now) = playing(Movement::DPad);
+        let chat = centre(layout.button(Button::Chat));
+        assert_eq!(
+            touch.finger(&layout, 1, Phase::Start, chat, now),
+            [Input::Mapping("key.chat", true)]
+        );
+        assert!(touch.finger(&layout, 1, Phase::End, chat, now).is_empty());
+        let context = touch.context;
+        assert_eq!(
+            touch.frame(context, now + MIN_STATE),
+            [Input::Mapping("key.chat", false)]
         );
     }
 

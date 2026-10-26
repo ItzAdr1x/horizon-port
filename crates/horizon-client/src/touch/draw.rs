@@ -99,6 +99,16 @@ const DROP: Icon = &[
     "##########",
 ];
 const PAUSE: Icon = &["##..##", "##..##", "##..##", "##..##", "##..##", "##..##"];
+/// A speech bubble.
+const CHAT: Icon = &[
+    ".#########.",
+    "###########",
+    "##.##.##.##",
+    "###########",
+    ".#########.",
+    "..##.......",
+    "..#........",
+];
 
 /// Which way an icon points: as drawn, or turned.
 #[derive(Clone, Copy)]
@@ -254,6 +264,12 @@ impl Touch {
                     layout.button(Button::Pause),
                     held(Button::Pause),
                     PAUSE,
+                    Turn::Up,
+                );
+                pen.button(
+                    layout.button(Button::Chat),
+                    held(Button::Chat),
+                    CHAT,
                     Turn::Up,
                 );
                 self.draw_holds(&mut pen, now);

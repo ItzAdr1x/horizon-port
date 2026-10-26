@@ -100,6 +100,8 @@ pub enum Button {
     Back,
     /// The keyboard's Shift, in inventories: bottom left, under the left thumb.
     Shift,
+    /// Opens chat, in play: left of Pause.
+    Chat,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -198,6 +200,11 @@ impl Layout {
                 let side = self.u(CELL);
                 [self.u(MARGIN), h - self.u(MARGIN) - side, side, side]
             }
+            Button::Chat => {
+                let side = self.u(SMALL);
+                let pause = self.button(Button::Pause);
+                [pause[0] - self.u(2.0) - side, self.u(MARGIN), side, side]
+            }
         }
     }
     pub(super) fn on(&self, button: Button, at: [f32; 2]) -> bool {
@@ -264,6 +271,7 @@ mod tests {
                 ("jump", layout.button(Button::Jump)),
                 ("inventory", layout.button(Button::Inventory)),
                 ("pause", layout.button(Button::Pause)),
+                ("chat", layout.button(Button::Chat)),
             ];
             let slack = layout.gui;
             for (name, r) in &rects {
