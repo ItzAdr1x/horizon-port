@@ -1,8 +1,7 @@
 //! The interactive title before world resources exist. Uses only the menu
 //! atlas/panorama; transfers the actual screen and queued entry to Game.
-use super::typing::Field;
+use super::typing::{Edit, Field};
 use super::*;
-use horizon_client::osk::Output as Edit;
 use horizon_client::{
     clipboard::{self, AppendSelection, SystemClipboard},
     options_ui::{Event, OptionsUi, Page},
@@ -450,22 +449,21 @@ impl Loading {
             return;
         };
         let atlas = &gui.atlas;
-        let key = match edit {
-            Edit::Backspace => KeyCode::Backspace,
-            _ => KeyCode::Enter,
-        };
-        match (field, edit) {
-            (_, Edit::Close) => {}
-            (Field::Options, Edit::Text(text)) => self.menu.options.type_text(atlas, &text),
-            (Field::Options, _) => {
+        match field {
+            Field::Options => {
+                let key = match edit {
+                    Edit::Text(text) => return self.menu.options.type_text(atlas, &text),
+                    Edit::Backspace => KeyCode::Backspace,
+                    Edit::Enter => KeyCode::Enter,
+                };
                 let events = self.menu.options.key(&mut self.settings, atlas, key, None);
                 self.menu_option_events(events);
             }
-            (Field::Title, edit) => {
+            Field::Title => {
                 match edit {
                     Edit::Text(text) => self.menu.title_edit(Some(&text), false),
                     Edit::Backspace => self.menu.title_edit(None, true),
-                    _ => {
+                    Edit::Enter => {
                         if let Some(title) = &mut self.menu.title {
                             title.confirm_edit();
                         }
@@ -473,6 +471,7 @@ impl Loading {
                 }
                 self.save_menu_address();
             }
+            // The game's screens: not open before it.
             _ => {}
         }
     }

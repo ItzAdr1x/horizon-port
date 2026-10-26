@@ -1,6 +1,9 @@
 //! Commands from the control socket (`horizon-ctl`), run on the game thread.
-use super::{Game, Screen, typing::Field};
-use horizon_client::{Result, items::ItemStack, osk::Output as Edit};
+use super::{
+    Game, Screen,
+    typing::{Edit, Field},
+};
+use horizon_client::{Result, items::ItemStack};
 use horizon_core::geometry::Vec3;
 use serde_json::{Value, json};
 use std::{

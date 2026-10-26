@@ -2,7 +2,6 @@
 //! on-screen keyboard, `horizon-ctl type` and, on iOS, the system keyboard, which this module
 //! also shows and hides.
 use super::{Game, Loading, Screen, books::BookScreen};
-use horizon_client::osk::Output as Edit;
 use serde_json::{Value, json};
 use winit::{keyboard::KeyCode, window::Window};
 
@@ -39,6 +38,14 @@ impl Field {
     fn enter_ends(self) -> bool {
         !matches!(self, Field::Sign | Field::Book)
     }
+}
+
+/// What typing does to the focused field, as the key that makes it would.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Edit {
+    Text(String),
+    Backspace,
+    Enter,
 }
 
 /// The system keyboard: whether the player wants it and whether the window was asked to show
@@ -134,30 +141,35 @@ impl Game<'_> {
         }
     }
 
-    /// An edit typed into the focused field, as the key that makes it would. False with no
-    /// field. `Close` is the pad keyboard's own: the field stays as it is.
+    /// An edit typed into the focused field. False with no field.
     pub(super) fn type_into_field(&mut self, edit: Edit) -> bool {
         let Some(field) = self.typing_field() else {
             return false;
         };
+        self.edit_field(field, edit);
+        true
+    }
+
+    /// An edit typed into `field`, as the key that makes it would.
+    fn edit_field(&mut self, field: Field, edit: Edit) {
         let (key, text) = match &edit {
             Edit::Text(text) => (None, Some(text.as_str())),
             Edit::Backspace => (Some(KeyCode::Backspace), None),
             Edit::Enter => (Some(KeyCode::Enter), None),
-            Edit::Close => return true,
         };
         let backspace = edit == Edit::Backspace;
         match field {
-            Field::Chat => match (key, text) {
-                (Some(key), _) => self.chat_key_code(key, None),
-                (None, text) => self.chat_type(text.unwrap_or_default()),
+            Field::Chat => match &edit {
+                Edit::Text(text) => self.chat_type(text),
+                Edit::Backspace => self.chat_key_code(KeyCode::Backspace, None),
+                Edit::Enter => self.chat_key_code(KeyCode::Enter, None),
             },
             Field::Sign => self.sign_input(key, text),
             Field::Book => self.book_input(key, text),
-            Field::CommandBlock => match edit {
-                Edit::Enter => self.command_block_done(),
+            Field::CommandBlock => match &edit {
+                Edit::Text(text) => self.command_block_type(text),
                 Edit::Backspace => self.command_block_backspace(),
-                _ => self.command_block_type(text.unwrap_or_default()),
+                Edit::Enter => self.command_block_done(),
             },
             // Enter leaves the search boxes, the anvil's name and World Options' boxes as they are.
             Field::CreativeSearch | Field::RecipeSearch | Field::Anvil | Field::WorldOptions
@@ -167,19 +179,19 @@ impl Game<'_> {
             Field::Anvil => self.station_text(text, backspace),
             Field::WorldOptions => self.world_options_text(text),
             Field::Options => {
-                let result = match (key, text) {
-                    (Some(key), _) => self.options_key(key, None),
-                    (None, text) => {
-                        let text = text.unwrap_or_default();
+                let result = match &edit {
+                    Edit::Text(text) => {
                         self.ui.options.type_text(&self.gui.atlas, text);
                         Ok(())
                     }
+                    Edit::Backspace => self.options_key(KeyCode::Backspace, None),
+                    Edit::Enter => self.options_key(KeyCode::Enter, None),
                 };
                 if let Err(e) = result {
                     log::warn!("Horizon: typing in the options: {e}");
                 }
             }
-            Field::Title => match edit {
+            Field::Title => match &edit {
                 Edit::Enter => {
                     if let Some(title) = self.title.as_mut() {
                         title.confirm_edit();
@@ -188,7 +200,6 @@ impl Game<'_> {
                 _ => self.title_edit(text, backspace),
             },
         }
-        true
     }
 
     /// Once a frame: the system keyboard follows the focused field.

@@ -3,7 +3,7 @@
 //! like a player (walk, look, break, place, use, click buttons). Actions that
 //! take time run as a task advanced every frame and reply when they finish or
 //! time out, so `horizon-ctl break 10 64 3` returns what the block dropped.
-use super::{Game, Screen};
+use super::{Game, Screen, typing::Edit};
 use horizon_client::{
     Result,
     block_entity_anim::Ticker,
@@ -13,7 +13,6 @@ use horizon_client::{
         Species,
         render::{PROFESSIONS, VILLAGER_TYPES},
     },
-    osk::Output as Edit,
     widgets,
 };
 use horizon_core::geometry::Vec3;

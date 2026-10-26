@@ -15,7 +15,7 @@
 //! behaviour (drags, sliders, scrollbars, hover highlights) with no pad code
 //! of its own. A screen with nothing registered falls back to the pointer,
 //! and a right stick click swaps modes for the open screen.
-use super::{Game, Screen};
+use super::{Game, Screen, typing::Edit};
 use horizon_client::{
     Result,
     creative::Creative,
@@ -33,6 +33,16 @@ use winit::{
     event_loop::ActiveEventLoop,
     keyboard::KeyCode,
 };
+
+/// The edit a key of the on-screen keyboard makes: none for its Close, which only closes it.
+fn osk_edit(out: osk::Output) -> Option<Edit> {
+    match out {
+        osk::Output::Text(text) => Some(Edit::Text(text)),
+        osk::Output::Backspace => Some(Edit::Backspace),
+        osk::Output::Enter => Some(Edit::Enter),
+        osk::Output::Close => None,
+    }
+}
 
 /// D-pad auto-repeat: the first step at once, the next after a pause.
 const REPEAT_DELAY: f32 = 0.35;
@@ -887,13 +897,13 @@ impl Game<'_> {
     /// What a key of the on-screen keyboard does: the same as a typed key in
     /// the field that has focus.
     fn pad_osk_output(&mut self, out: osk::Output) {
-        if out == osk::Output::Close {
+        let Some(edit) = osk_edit(out) else {
             self.pad.menu.osk = None;
             self.pad.menu.osk_dismissed = true;
             return;
-        }
-        let enter = out == osk::Output::Enter;
-        self.type_into_field(out);
+        };
+        let enter = edit == Edit::Enter;
+        self.type_into_field(edit);
         // Enter ends the typing; a field that closed with it closes the keyboard.
         if enter || self.typing_field().is_none() {
             self.pad.menu.osk = None;
@@ -973,5 +983,21 @@ impl Game<'_> {
             batch.fill(atlas, x, y, 1.0, h, white);
             batch.fill(atlas, x + w - 1.0, y, 1.0, h, white);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_on_screen_keyboard_edits_the_field_but_its_close_key_does_not() {
+        assert_eq!(
+            osk_edit(osk::Output::Text("é".into())),
+            Some(Edit::Text("é".into()))
+        );
+        assert_eq!(osk_edit(osk::Output::Backspace), Some(Edit::Backspace));
+        assert_eq!(osk_edit(osk::Output::Enter), Some(Edit::Enter));
+        assert_eq!(osk_edit(osk::Output::Close), None);
     }
 }
