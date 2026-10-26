@@ -857,3 +857,35 @@ fn typing_is_true_exactly_when_typed_text_has_a_field() {
     // The main menu; the search; the name, the seed, then neither; the address; the code.
     assert_eq!(seen, [false, true, true, true, false, true, true]);
 }
+
+#[test]
+fn a_typed_field_name_focuses_its_box_and_a_wrong_one_changes_nothing() {
+    let mut f = Fixture::new();
+    assert!(f.title.focus_field("name").is_err());
+    assert!(matches!(f.title.mode, Mode::Main));
+    f.title.mode = Title::new_world();
+    if let Mode::Create { focus, .. } = &mut f.title.mode {
+        *focus = 2;
+    }
+    assert!(f.title.focus_field("colour").is_err());
+    let Mode::Create { focus, options, .. } = &f.title.mode else {
+        unreachable!()
+    };
+    assert_eq!((*focus, options.tab), (2, 0));
+    f.title.focus_field("seed").unwrap();
+    let Mode::Create { focus, options, .. } = &f.title.mode else {
+        unreachable!()
+    };
+    assert_eq!((*focus, options.tab), (1, 1));
+
+    f.world("World", "World");
+    f.select();
+    f.click("Edit");
+    if let Mode::Edit { focused, .. } = &mut f.title.mode {
+        *focused = false;
+    }
+    assert!(f.title.focus_field("seed").is_err());
+    assert!(matches!(f.title.mode, Mode::Edit { focused: false, .. }));
+    f.title.focus_field("name").unwrap();
+    assert!(matches!(f.title.mode, Mode::Edit { focused: true, .. }));
+}

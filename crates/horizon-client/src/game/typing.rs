@@ -2,7 +2,7 @@
 //! on-screen keyboard, `horizon-ctl type` and, on iOS, the system keyboard, which this module
 //! also shows and hides.
 use super::{Game, Loading, Screen, books::BookScreen};
-use horizon_client::clipboard::EditShortcut;
+use horizon_client::{clipboard::EditShortcut, osk};
 use serde_json::{Value, json};
 use winit::{
     event::{Ime, WindowEvent},
@@ -51,6 +51,19 @@ pub(super) enum Edit {
     Text(String),
     Backspace,
     Enter,
+}
+
+impl Edit {
+    /// The edit a key of the pad's on-screen keyboard makes: none for its Close, which only
+    /// closes it.
+    pub(super) fn from_osk(out: osk::Output) -> Option<Edit> {
+        match out {
+            osk::Output::Text(text) => Some(Edit::Text(text)),
+            osk::Output::Backspace => Some(Edit::Backspace),
+            osk::Output::Enter => Some(Edit::Enter),
+            osk::Output::Close => None,
+        }
+    }
 }
 
 /// What the system keyboard tells the window, which the screens' handlers don't know.
@@ -340,6 +353,20 @@ impl Loading {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_on_screen_keyboard_edits_the_field_but_its_close_key_does_not() {
+        assert_eq!(
+            Edit::from_osk(osk::Output::Text("é".into())),
+            Some(Edit::Text("é".into()))
+        );
+        assert_eq!(
+            Edit::from_osk(osk::Output::Backspace),
+            Some(Edit::Backspace)
+        );
+        assert_eq!(Edit::from_osk(osk::Output::Enter), Some(Edit::Enter));
+        assert_eq!(Edit::from_osk(osk::Output::Close), None);
+    }
 
     #[test]
     fn a_typing_screen_shows_the_keyboard_once_and_its_closing_hides_it() {

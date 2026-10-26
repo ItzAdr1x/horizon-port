@@ -3,11 +3,7 @@ use super::{
     Game, Screen,
     typing::{Edit, Field},
 };
-use horizon_client::{
-    Result,
-    items::ItemStack,
-    title::{Mode, Title},
-};
+use horizon_client::{Result, items::ItemStack};
 use horizon_core::geometry::Vec3;
 use serde_json::{Value, json};
 use std::{
@@ -543,7 +539,10 @@ impl Game<'_> {
                 let args = TypeArgs::parse(line);
                 let field = type_target(self.front_field(), self.typing_field(), args.field)?;
                 if let Some(name) = args.field {
-                    focus_title_field(self.title.as_mut().ok_or("no title screen")?, name)?;
+                    self.title
+                        .as_mut()
+                        .ok_or("no title screen")?
+                        .focus_field(name)?;
                 }
                 if args.replace {
                     self.clear_field(field);
@@ -1057,24 +1056,6 @@ fn type_target(front: Option<Field>, focused: Option<Field>, field: Option<&str>
     }
 }
 
-/// `type --field`: the create-world screen's name or seed box, each on its own tab, or the
-/// edit-world screen's name. An error changes nothing.
-fn focus_title_field(title: &mut Title, name: &str) -> Result<()> {
-    match (&mut title.mode, name) {
-        (Mode::Create { focus, options, .. }, "name" | "seed") => {
-            let index = u8::from(name == "seed");
-            *focus = index;
-            options.tab = usize::from(index);
-        }
-        (Mode::Create { .. }, other) => {
-            return Err(format!("the create-world fields are name and seed, not {other}").into());
-        }
-        (Mode::Edit { focused, .. }, "name") => *focused = true,
-        _ => return Err("--field works on the create-world or edit-world screen".into()),
-    }
-    Ok(())
-}
-
 /// PCI vendor IDs of the GPU makers players have (Apple's is wgpu's Metal value).
 fn vendor_name(id: u32) -> String {
     match id {
@@ -1206,27 +1187,5 @@ mod tests {
             type_target(Some(Field::Options), Some(Field::Options), None).unwrap(),
             Field::Options
         );
-
-        let root = std::env::temp_dir().join(format!("horizon-ctl-type-{}", std::process::id()));
-        let mut title = Title::new(root.join("saves"), &root);
-        assert!(focus_title_field(&mut title, "name").is_err());
-        assert!(matches!(title.mode, Mode::Main));
-        title.mode = Mode::Create {
-            name: String::new(),
-            seed: String::new(),
-            creative: false,
-            focus: 2,
-            options: Default::default(),
-        };
-        assert!(focus_title_field(&mut title, "colour").is_err());
-        let Mode::Create { focus, options, .. } = &title.mode else {
-            unreachable!()
-        };
-        assert_eq!((*focus, options.tab), (2, 0));
-        focus_title_field(&mut title, "seed").unwrap();
-        let Mode::Create { focus, options, .. } = &title.mode else {
-            unreachable!()
-        };
-        assert_eq!((*focus, options.tab), (1, 1));
     }
 }

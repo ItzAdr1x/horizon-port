@@ -1,6 +1,6 @@
 //! CreateWorldScreen: the Game, World and More tabs under a MenuTabBar, with
 //! Create New World and Cancel in a 33-pixel footer.
-use super::{Button, Title};
+use super::{Button, Mode, Title};
 use crate::{
     hud::{HudAtlas, HudBatch},
     text::Text,
@@ -305,6 +305,26 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
 }
 
 impl Title {
+    /// `horizon-ctl type --field`: the create-world screen's name or seed box, each on its own
+    /// tab, or the edit-world screen's name. An error changes nothing.
+    pub fn focus_field(&mut self, name: &str) -> crate::Result<()> {
+        match (&mut self.mode, name) {
+            (Mode::Create { focus, options, .. }, "name" | "seed") => {
+                let index = u8::from(name == "seed");
+                *focus = index;
+                options.tab = usize::from(index);
+            }
+            (Mode::Create { .. }, other) => {
+                return Err(
+                    format!("the create-world fields are name and seed, not {other}").into(),
+                );
+            }
+            (Mode::Edit { focused, .. }, "name") => *focused = true,
+            _ => return Err("--field works on the create-world or edit-world screen".into()),
+        }
+        Ok(())
+    }
+
     /// Everything but the buttons, which `draw` adds after.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_create(
