@@ -94,7 +94,7 @@ impl Button {
 }
 
 /// The input state `mouseClicked`/`mouseReleased` keep between events.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Clicks {
     /// `isQuickCrafting` with `quickCraftingButton`.
     quick_crafting: Option<Button>,
@@ -203,6 +203,12 @@ impl Clicks {
     }
 }
 
+impl Default for Clicks {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +270,23 @@ mod tests {
             clicks.release(&out, Button::Right, true, false, true, false),
             Release::Nothing
         );
+    }
+
+    #[test]
+    fn a_new_screens_first_release_clicks_nothing() {
+        let slot = Target::Slot(3);
+        for mut clicks in [Clicks::new(), Clicks::default()] {
+            // A button held across the change, with a stack in hand.
+            assert_eq!(
+                clicks.release(&slot, Button::Left, false, false, false, false),
+                Release::Nothing
+            );
+            assert_eq!(clicks.press(&slot, Button::Left, false, false, false), None);
+            assert_eq!(
+                clicks.release(&slot, Button::Left, false, false, false, false),
+                Release::Click(Input::Pickup)
+            );
+        }
     }
 
     #[test]
