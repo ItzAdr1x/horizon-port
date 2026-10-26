@@ -1,11 +1,12 @@
-//! Touch input (`horizon_client::touch`) applied to the game: the pointer as mouse events, the
-//! view turned as by a grabbed mouse, and buttons as the vanilla key mappings they stand for.
+//! Touch input (`horizon_client::touch`) applied to the game: the pointer and its buttons as mouse
+//! events, the view turned as by a grabbed mouse, and buttons as the vanilla key mappings they
+//! stand for.
 use super::{Game, Loading, Screen};
 use horizon_client::{
     Result,
     hud::HudBatch,
     keymapping::{SNEAK, SPRINT},
-    touch::{Context, Input, Layout, Mode, Phase},
+    touch::{self as fingers, Context, Here, Input, Layout, Mode, Phase, TouchEvent},
 };
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -30,27 +31,35 @@ fn phase(phase: TouchPhase) -> Phase {
     }
 }
 
-/// The mouse events a touch pointer stands for: a move there, then the left button's press or
-/// release.
-fn pointer_events(
-    device_id: DeviceId,
-    at: [f64; 2],
-    pressed: Option<bool>,
-) -> impl Iterator<Item = WindowEvent> {
-    let moved = WindowEvent::CursorMoved {
+/// The mouse event one of the touch layer's pointer inputs stands for.
+fn mouse_event(device_id: DeviceId, input: &Input) -> Option<WindowEvent> {
+    let button = |button, state| WindowEvent::MouseInput {
         device_id,
-        position: PhysicalPosition::new(at[0], at[1]),
-    };
-    let button = pressed.map(|pressed| WindowEvent::MouseInput {
-        device_id,
-        state: if pressed {
-            ElementState::Pressed
-        } else {
-            ElementState::Released
+        state,
+        button: match button {
+            fingers::MouseButton::Left => MouseButton::Left,
+            fingers::MouseButton::Right => MouseButton::Right,
+            fingers::MouseButton::Middle => MouseButton::Middle,
         },
-        button: MouseButton::Left,
-    });
-    std::iter::once(moved).chain(button)
+    };
+    Some(match *input {
+        Input::Pointer(at) => WindowEvent::CursorMoved {
+            device_id,
+            position: PhysicalPosition::new(at[0], at[1]),
+        },
+        Input::Press { button: b, .. } => button(b, ElementState::Pressed),
+        Input::Release(b) | Input::Abort(b) => button(b, ElementState::Released),
+        _ => return None,
+    })
+}
+
+fn touch_event(touch: &Touch, here: Here) -> TouchEvent {
+    TouchEvent {
+        id: touch.id,
+        phase: phase(touch.phase),
+        at: [touch.location.x, touch.location.y],
+        here,
+    }
 }
 
 impl Game<'_> {
@@ -83,10 +92,8 @@ impl Game<'_> {
         let Some(layout) = self.touch_layout() else {
             return;
         };
-        let at = [touch.location.x, touch.location.y];
-        let inputs = self
-            .touch
-            .touch(&layout, touch.id, phase(touch.phase), at, Instant::now());
+        let event = touch_event(&touch, Here::default());
+        let inputs = self.touch.touch(&layout, event, Instant::now());
         self.apply_touch(event_loop, id, touch.device_id, inputs);
     }
 
@@ -131,14 +138,28 @@ impl Game<'_> {
         for input in inputs {
             let lets_go = matches!(
                 input,
-                Input::Pointer { .. } | Input::Mapping(_, false) | Input::Sprint(false)
+                Input::Pointer(_)
+                    | Input::Release(_)
+                    | Input::Abort(_)
+                    | Input::Mapping(_, false)
+                    | Input::Sprint(false)
             );
             if busy && !lets_go {
                 continue;
             }
+            match input {
+                // A press of the touch layer's own never makes a double click (PICKUP_ALL).
+                Input::Press { fresh: true, .. } => self.last_inv_click = None,
+                // Whatever a mouse button's release would do to the inventory is undone first.
+                Input::Abort(_) if matches!(self.screen, Screen::Inventory | Screen::Creative) => {
+                    self.inv_drag = None;
+                    self.inv_clicks.skip_release();
+                }
+                _ => {}
+            }
             let result = match input {
-                Input::Pointer { at, pressed } => {
-                    for event in pointer_events(device_id, at, pressed) {
+                Input::Pointer(_) | Input::Press { .. } | Input::Release(_) | Input::Abort(_) => {
+                    if let Some(event) = mouse_event(device_id, &input) {
                         self.window_event(event_loop, id, event);
                     }
                     Ok(())
@@ -249,15 +270,11 @@ impl Loading {
             return Ok(());
         };
         let layout = Layout::new(r.config.width, r.config.height, window.scale_factor());
-        let at = [touch.location.x, touch.location.y];
-        let inputs = self
-            .touch
-            .touch(&layout, touch.id, phase(touch.phase), at, Instant::now());
+        let event = touch_event(&touch, Here::default());
+        let inputs = self.touch.touch(&layout, event, Instant::now());
         for input in inputs {
-            if let Input::Pointer { at, pressed } = input {
-                for event in pointer_events(touch.device_id, at, pressed) {
-                    self.menu_event(event_loop, event)?;
-                }
+            if let Some(event) = mouse_event(touch.device_id, &input) {
+                self.menu_event(event_loop, event)?;
             }
         }
         Ok(())
