@@ -24,7 +24,7 @@ mod layout;
 mod menu;
 use keys::Keys;
 pub use layout::{Button, Cell, Layout};
-pub use menu::{Here, MouseButton, PlaceOne, PlaceResult, SlotKind, SlotSpot, Spot};
+pub use menu::{Here, Loupe, MouseButton, PlaceOne, PlaceResult, SlotKind, SlotSpot, Spot};
 
 /// A finger held still on the view this long mines, or uses the held item.
 const HOLD: Duration = Duration::from_millis(300);

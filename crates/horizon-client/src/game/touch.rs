@@ -424,12 +424,32 @@ impl Game<'_> {
         self.mapping_action(mapping, false)
     }
 
-    pub(super) fn draw_touch(&self, batch: &mut HudBatch) {
+    pub(super) fn draw_touch(&mut self, batch: &mut HudBatch) {
         if let Some(layout) = self.touch_layout() {
             let sneaking = self.toggles.is_down(SNEAK);
             self.touch
                 .draw(batch, &self.gui.atlas, &layout, sneaking, Instant::now());
+            self.draw_paint_loupe(batch, &layout);
         }
+    }
+
+    /// While a finger puts items on a slot one at a time, that slot's stack with its count on
+    /// the plate above the fingertip: the finger covers the slot itself.
+    fn draw_paint_loupe(&mut self, batch: &mut HudBatch, layout: &Layout) {
+        let Some(loupe) = self.touch.loupe(layout) else {
+            return;
+        };
+        let s = batch.scale;
+        let (x, y) = (loupe.slot[0] as f32 / s, loupe.slot[1] as f32 / s);
+        let Some(stack) = self
+            .slot_at(batch, x, y)
+            .and_then(|slot| self.slot_view(slot))
+        else {
+            return;
+        };
+        let [left, top, side, _] = loupe.square.map(|v| v / s);
+        let corner = (side - 16.0) / 2.0;
+        self.draw_item(batch, &stack, left + corner, top + corner);
     }
 
     /// `horizon-ctl touch ...`: a finger as the screen reports one, in GUI pixels.

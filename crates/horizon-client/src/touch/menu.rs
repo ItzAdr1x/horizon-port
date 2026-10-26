@@ -85,6 +85,17 @@ pub struct PlaceOne {
     pub at: [f64; 2],
 }
 
+/// While a finger paints a slot: a point inside the slot, and the square above the fingertip
+/// where the game shows the slot's stack, which the finger covers. Physical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Loupe {
+    pub slot: [f64; 2],
+    pub square: [f32; 4],
+}
+
+/// The loupe's side in GUI pixels: an item and its count.
+const LOUPE: f32 = 18.0;
+
 /// What the game did with a `PlaceOne`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlaceResult {
@@ -303,6 +314,26 @@ impl Paint {
             Aim::Refused { slot }
         };
         true
+    }
+
+    /// The loupe over the finger while an item is to come: as big as `Layout::above`'s square, or
+    /// an item's, whichever is larger, on the same spot.
+    pub(super) fn loupe(&self, layout: &Layout) -> Option<Loupe> {
+        let Aim::Due { point, .. } = self.aim else {
+            return None;
+        };
+        let [x, y, w, h] = layout.above([self.at[0] as f32, self.at[1] as f32]);
+        let side = w.max(LOUPE * layout.gui);
+        let square = [
+            (x + (w - side) / 2.0).max(0.0),
+            (y + h - side).max(0.0),
+            side,
+            side,
+        ];
+        Some(Loupe {
+            slot: point,
+            square,
+        })
     }
 
     /// The ring toward the next item: around the finger, `held` of `wait` filled. None while
@@ -656,6 +687,14 @@ impl Touch {
         {
             *gesture = Gesture::Done;
         }
+    }
+
+    /// Where the slot a finger paints is shown, if one does.
+    pub fn loupe(&self, layout: &Layout) -> Option<Loupe> {
+        self.fingers.iter().find_map(|f| match &f.role {
+            Role::Menu(Gesture::Painting(paint)) => paint.loupe(layout),
+            _ => None,
+        })
     }
 
     /// Whether a click on `here` is shifted, as the Shift button stands.

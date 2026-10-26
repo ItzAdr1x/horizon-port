@@ -327,8 +327,8 @@ impl Touch {
     }
 
     /// The menu fingers' marks: the ring filling under a finger whose hold will do something,
-    /// or toward a painting finger's next item, and the drop hint above a finger that would
-    /// throw a stack.
+    /// or toward a painting finger's next item with the loupe's plate above it, and the drop
+    /// hint above a finger that would throw a stack.
     fn draw_menu(&self, pen: &mut Pen<'_>, now: Instant) {
         let (carrying, shifted) = (self.context.carrying, self.menus.shift.active());
         for finger in &self.fingers {
@@ -348,6 +348,10 @@ impl Touch {
                 Role::Menu(Gesture::Painting(paint)) => {
                     if let Some((at, held, wait)) = paint.ring(now) {
                         pen.ring(at, held, wait);
+                    }
+                    // The game draws the slot's stack over it (`Touch::loupe`).
+                    if let Some(loupe) = paint.loupe(pen.layout) {
+                        pen.plate(loupe.square, false);
                     }
                 }
                 Role::Menu(Gesture::Pressing {

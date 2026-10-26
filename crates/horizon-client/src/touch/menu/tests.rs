@@ -1018,6 +1018,31 @@ fn the_ring_fills_toward_the_next_item_and_not_over_a_blocked_slot() {
 }
 
 #[test]
+fn the_loupe_shows_the_painted_slot_above_the_fingertip() {
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    assert_eq!(touch.loupe(&layout), None);
+    let (mut touch, layout, now) = painting();
+    let gap = [A[0] + 45.0, A[1]];
+    touch.on(&layout, event(1, Phase::Move, gap, Here::default()), now);
+    let loupe = touch.loupe(&layout).unwrap();
+    assert_eq!(loupe.slot, A);
+    let [x, y, w, h] = loupe.square;
+    assert!(
+        x < gap[0] as f32 && gap[0] as f32 <= x + w,
+        "over the finger: {loupe:?}"
+    );
+    assert!(
+        y + h <= gap[1] as f32 - layout.finger_clearance(),
+        "clear of the fingertip: {loupe:?}"
+    );
+    assert!(w >= 18.0 * layout.gui, "an item fits: {loupe:?}");
+    tick(&mut touch, ms(now, 450));
+    touch.placed(1, PlaceResult::Ended);
+    assert_eq!(touch.loupe(&layout), None);
+}
+
+#[test]
 fn shift_at_the_landing_keeps_the_shifted_tap_and_paints_nothing() {
     let (mut touch, layout, now) = inventory();
     hand(&mut touch, true, now);
