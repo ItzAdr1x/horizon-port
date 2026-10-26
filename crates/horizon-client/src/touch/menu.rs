@@ -76,20 +76,21 @@ pub enum MouseButton {
     Middle,
 }
 
-/// Finger `finger` puts one item from the hand into the slot at `at` (physical pixels): the
-/// mouse's right click there, which the game sends only if its menu says the click moves
-/// exactly that one item. The game answers at once with `Touch::placed`.
+/// Finger `finger` puts one item from the hand into slot `slot`: the mouse's right click at
+/// `at` (physical pixels), which the game sends only if `slot` is still there and its menu says
+/// the click moves exactly that one item. The game answers at once with `Touch::placed`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlaceOne {
     pub finger: u64,
+    pub slot: u32,
     pub at: [f64; 2],
 }
 
-/// While a finger paints a slot: a point inside the slot, and the square above the fingertip
-/// where the game shows the slot's stack, which the finger covers. Physical pixels.
+/// While a finger paints slot `slot`: the square above the fingertip, in physical pixels, where
+/// the game shows the slot's stack, which the finger covers.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Loupe {
-    pub slot: [f64; 2],
+    pub slot: u32,
     pub square: [f32; 4],
 }
 
@@ -218,7 +219,11 @@ impl Paint {
         then: Duration,
         out: &mut Vec<Input>,
     ) {
-        out.push(Input::PlaceOne(PlaceOne { finger, at: point }));
+        out.push(Input::PlaceOne(PlaceOne {
+            finger,
+            slot,
+            at: point,
+        }));
         self.aim = Aim::Asked {
             slot,
             point,
@@ -319,7 +324,7 @@ impl Paint {
     /// The loupe over the finger while an item is to come: as big as `Layout::above`'s square, or
     /// an item's, whichever is larger, on the same spot.
     pub(super) fn loupe(&self, layout: &Layout) -> Option<Loupe> {
-        let Aim::Due { point, .. } = self.aim else {
+        let Aim::Due { slot, .. } = self.aim else {
             return None;
         };
         let [x, y, w, h] = layout.above([self.at[0] as f32, self.at[1] as f32]);
@@ -330,10 +335,7 @@ impl Paint {
             side,
             side,
         ];
-        Some(Loupe {
-            slot: point,
-            square,
-        })
+        Some(Loupe { slot, square })
     }
 
     /// The ring toward the next item: around the finger, `held` of `wait` filled. None while

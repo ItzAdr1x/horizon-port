@@ -823,9 +823,13 @@ fn ms(now: Instant, millis: u64) -> Instant {
     now + Duration::from_millis(millis)
 }
 
-/// Finger 1's item put down at `at`.
-const fn place(at: [f64; 2]) -> Input {
-    Input::PlaceOne(PlaceOne { finger: 1, at })
+/// Finger 1's item put down on slot `slot`, at `at`.
+const fn place(slot: u32, at: [f64; 2]) -> Input {
+    Input::PlaceOne(PlaceOne {
+        finger: 1,
+        slot,
+        at,
+    })
 }
 
 /// Finger 1 with a stack in hand landed at `A` on empty slot 3, held still for its first item,
@@ -833,7 +837,7 @@ const fn place(at: [f64; 2]) -> Input {
 fn painting() -> (Touch, Layout, Instant) {
     let (mut touch, layout, now) = holding();
     touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
-    assert_eq!(tick(&mut touch, ms(now, 250)), [place(A)]);
+    assert_eq!(tick(&mut touch, ms(now, 250)), [place(3, A)]);
     touch.placed(1, PlaceResult::Placed);
     (touch, layout, ms(now, 250))
 }
@@ -860,7 +864,7 @@ fn a_held_slot_takes_one_at_once_then_one_after_a_dwell_then_one_steadily() {
     touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
     let mut placed = Vec::new();
     for millis in (0..=1500).step_by(10) {
-        if tick(&mut touch, ms(now, millis)) == [place(A)] {
+        if tick(&mut touch, ms(now, millis)) == [place(3, A)] {
             touch.placed(1, PlaceResult::Placed);
             placed.push(millis);
         }
@@ -876,18 +880,18 @@ fn a_held_slot_takes_one_at_once_then_one_after_a_dwell_then_one_steadily() {
 fn a_late_frame_places_one_item_not_a_burst() {
     let (mut touch, _, now) = painting();
     let late = ms(now, 3000);
-    assert_eq!(tick(&mut touch, late), [place(A)]);
+    assert_eq!(tick(&mut touch, late), [place(3, A)]);
     touch.placed(1, PlaceResult::Placed);
     assert!(tick(&mut touch, late).is_empty());
     assert!(tick(&mut touch, ms(late, 199)).is_empty());
-    assert_eq!(tick(&mut touch, ms(late, 200)), [place(A)]);
+    assert_eq!(tick(&mut touch, ms(late, 200)), [place(3, A)]);
 }
 
 #[test]
 fn one_item_is_asked_for_at_a_time() {
     let (mut touch, layout, now) = holding();
     touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
-    assert_eq!(tick(&mut touch, ms(now, 250)), [place(A)]);
+    assert_eq!(tick(&mut touch, ms(now, 250)), [place(3, A)]);
     assert!(tick(&mut touch, ms(now, 5000)).is_empty());
     assert_eq!(
         touch.on(&layout, event(1, Phase::Move, B, empty(4)), ms(now, 5000)),
@@ -901,12 +905,12 @@ fn a_slide_puts_one_on_each_new_slot_and_a_revisited_slot_waits_for_the_dwell() 
     let c = [B[0] + 100.0, B[1]];
     assert_eq!(
         touch.on(&layout, event(1, Phase::Move, B, empty(4)), now),
-        [place(B), Input::Pointer(B)]
+        [place(4, B), Input::Pointer(B)]
     );
     touch.placed(1, PlaceResult::Placed);
     assert_eq!(
         touch.on(&layout, event(1, Phase::Move, c, empty(5)), now),
-        [place(c), Input::Pointer(c)]
+        [place(5, c), Input::Pointer(c)]
     );
     touch.placed(1, PlaceResult::Placed);
     let back = [A[0] + 10.0, A[1]];
@@ -915,7 +919,7 @@ fn a_slide_puts_one_on_each_new_slot_and_a_revisited_slot_waits_for_the_dwell() 
         [Input::Pointer(back)]
     );
     assert!(tick(&mut touch, ms(now, 449)).is_empty());
-    assert_eq!(tick(&mut touch, ms(now, 450)), [place(back)]);
+    assert_eq!(tick(&mut touch, ms(now, 450)), [place(3, back)]);
 }
 
 #[test]
@@ -926,21 +930,21 @@ fn a_gap_keeps_the_slot_and_a_pitch_of_background_lets_it_go() {
         touch.on(&layout, event(1, Phase::Move, gap, Here::default()), now),
         [Input::Pointer(gap)]
     );
-    assert_eq!(tick(&mut touch, ms(now, 450)), [place(A)]);
+    assert_eq!(tick(&mut touch, ms(now, 450)), [place(3, A)]);
     touch.placed(1, PlaceResult::Placed);
     let far = [A[0] + PITCH + 10.0, A[1]];
     touch.on(&layout, event(1, Phase::Move, far, Here::default()), now);
     assert!(tick(&mut touch, ms(now, 5000)).is_empty());
     assert_eq!(
         touch.on(&layout, event(1, Phase::Move, B, empty(4)), ms(now, 5000)),
-        [place(B), Input::Pointer(B)]
+        [place(4, B), Input::Pointer(B)]
     );
 }
 
 #[test]
 fn an_ended_painting_puts_nothing_more_down() {
     let (mut touch, layout, now) = painting();
-    assert_eq!(tick(&mut touch, ms(now, 450)), [place(A)]);
+    assert_eq!(tick(&mut touch, ms(now, 450)), [place(3, A)]);
     touch.placed(1, PlaceResult::Ended);
     assert!(tick(&mut touch, ms(now, 5000)).is_empty());
     assert_eq!(
@@ -969,7 +973,7 @@ fn a_painting_finger_stops_once_the_hand_is_empty() {
 fn a_blocked_slot_takes_no_more_and_its_lift_clicks_nothing() {
     let (mut touch, layout, now) = holding();
     touch.on(&layout, event(1, Phase::Start, A, slot(3)), now);
-    assert_eq!(tick(&mut touch, ms(now, 250)), [place(A)]);
+    assert_eq!(tick(&mut touch, ms(now, 250)), [place(3, A)]);
     touch.placed(1, PlaceResult::Blocked);
     assert!(tick(&mut touch, ms(now, 5000)).is_empty());
     let back = [A[0] + 10.0, A[1]];
@@ -1007,7 +1011,7 @@ fn the_ring_fills_toward_the_next_item_and_not_over_a_blocked_slot() {
     let (mut touch, layout, now) = holding();
     touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
     assert!(marks_near(&touch, &layout, A, ms(now, 100)) > 0);
-    assert_eq!(tick(&mut touch, ms(now, 250)), [place(A)]);
+    assert_eq!(tick(&mut touch, ms(now, 250)), [place(3, A)]);
     touch.placed(1, PlaceResult::Placed);
     assert!(marks_near(&touch, &layout, A, ms(now, 400)) > 0);
     let (mut touch, layout, now) = holding();
@@ -1026,7 +1030,7 @@ fn the_loupe_shows_the_painted_slot_above_the_fingertip() {
     let gap = [A[0] + 45.0, A[1]];
     touch.on(&layout, event(1, Phase::Move, gap, Here::default()), now);
     let loupe = touch.loupe(&layout).unwrap();
-    assert_eq!(loupe.slot, A);
+    assert_eq!(loupe.slot, 3);
     let [x, y, w, h] = loupe.square;
     assert!(
         x < gap[0] as f32 && gap[0] as f32 <= x + w,
@@ -1068,7 +1072,7 @@ fn shift_during_painting_ends_it() {
     let (mut touch, layout, now) = inventory();
     hand(&mut touch, true, now);
     touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
-    assert_eq!(tick(&mut touch, ms(now, 250)), [place(A)]);
+    assert_eq!(tick(&mut touch, ms(now, 250)), [place(3, A)]);
     touch.placed(1, PlaceResult::Placed);
     tap_shift(&mut touch, &layout, ms(now, 300));
     assert_eq!(

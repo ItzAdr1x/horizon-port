@@ -277,7 +277,7 @@ impl Game<'_> {
                     let result = if busy || changed {
                         PlaceResult::Ended
                     } else {
-                        self.inventory_place_one(event_loop, id, device_id, place.at)
+                        self.inventory_place_one(event_loop, id, device_id, place)
                     };
                     self.touch.placed(place.finger, result);
                     changed |= self.scene() != before;
@@ -507,15 +507,10 @@ impl Game<'_> {
         let Some(loupe) = self.touch.loupe(layout) else {
             return;
         };
-        let s = batch.scale;
-        let (x, y) = (loupe.slot[0] as f32 / s, loupe.slot[1] as f32 / s);
-        let Some(stack) = self
-            .slot_at(batch, x, y)
-            .and_then(|slot| self.slot_view(slot))
-        else {
+        let Some(stack) = self.slot_view(loupe.slot as usize) else {
             return;
         };
-        let [left, top, side, _] = loupe.square.map(|v| v / s);
+        let [left, top, side, _] = loupe.square.map(|v| v / batch.scale);
         let corner = (side - 16.0) / 2.0;
         self.draw_item(batch, &stack, left + corner, top + corner);
     }

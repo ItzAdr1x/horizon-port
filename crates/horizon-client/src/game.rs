@@ -6555,16 +6555,17 @@ impl Game<'_> {
             self.window_event(event_loop, id, event);
         }
     }
-    /// A painting finger's one item into the slot at `at` (physical pixels): the mouse's right
-    /// click there, sent only when the menu engine's own click, run first on a copy, moves
-    /// exactly one item from the hand into that slot, and then read back. On every path the
-    /// click changes the hand at once: the server's copy is predicted (`remote_menu_ops`).
+    /// A painting finger's one item into the slot it aims at: the mouse's right click at its
+    /// point (physical pixels), sent only when that slot is still under it and the menu engine's
+    /// own click, run first on a copy, moves exactly one item from the hand into that slot, and
+    /// then read back. On every path the click changes the hand at once: the server's copy is
+    /// predicted (`remote_menu_ops`).
     pub(super) fn inventory_place_one(
         &mut self,
         event_loop: &ActiveEventLoop,
         id: WindowId,
         device_id: DeviceId,
-        at: [f64; 2],
+        place: horizon_client::touch::PlaceOne,
     ) -> horizon_client::touch::PlaceResult {
         use horizon_client::touch::PlaceResult;
         let (Some(batch), Some(carried)) = (self.gui_scale(), self.carried.clone()) else {
@@ -6576,13 +6577,16 @@ impl Game<'_> {
         if self.recipe_book_takes_pointer() {
             return PlaceResult::Blocked;
         }
-        let Some(slot) = self.slot_at(
+        // A window resized, folded or unfolded since the finger aimed moves the slots under it.
+        let (at, slot) = (place.at, place.slot as usize);
+        let under = self.slot_at(
             &batch,
             at[0] as f32 / batch.scale,
             at[1] as f32 / batch.scale,
-        ) else {
-            return PlaceResult::Blocked;
-        };
+        );
+        if under != Some(slot) {
+            return PlaceResult::Ended;
+        }
         // Only vanilla's plain right click: not shifted, not inside a drag of the mouse's,
         // not one Mouse Tweaks takes over.
         let mut takes = false;
