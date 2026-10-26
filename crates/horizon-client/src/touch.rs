@@ -28,7 +28,7 @@ mod menu;
 pub use functions::{Function, Shown};
 use keys::Keys;
 pub use layout::{Button, Cell, Layout};
-pub use menu::{Here, MouseButton, SlotKind, SlotSpot, Spot};
+pub use menu::{Here, Loupe, MouseButton, PlaceOne, PlaceResult, SlotKind, SlotSpot, Spot};
 
 /// A finger held still on the view this long mines, or uses the held item.
 const HOLD: Duration = Duration::from_millis(300);
@@ -114,6 +114,9 @@ pub struct Context {
     pub slots: bool,
     /// The HUD is drawn (F1 hides it): the hotbar's slots answer taps.
     pub hud_visible: bool,
+    /// The hand holds a stack over an open inventory: taps place it, holds place one at a
+    /// time, drags spread it.
+    pub carrying: bool,
 }
 
 /// What a touch does to the game. On the title screen and in menus, only what a desk's mouse
@@ -140,6 +143,9 @@ pub enum Input {
     /// If the hand holds a stack now, a left click at this point (physical pixels): a dragged
     /// stack put down, or what that leaves in hand put back where it came from. Never a result.
     PutDown([f64; 2]),
+    /// One item from the hand into a slot, if the menu says the right click there moves exactly
+    /// that, answered at once (`Touch::placed`).
+    PlaceOne(PlaceOne),
     /// A tap focused a text field: the system keyboard is wanted.
     Keyboard,
     /// Mouse movement turning the view.
@@ -160,7 +166,7 @@ pub enum Input {
 }
 
 /// What a finger does, decided where it lands.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Role {
     /// On the title screen or a menu.
     Menu(menu::Gesture),
@@ -205,7 +211,7 @@ impl Role {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Finger {
     id: u64,
     role: Role,
@@ -284,9 +290,11 @@ impl Touch {
                 self.fingers.push(Finger { id, role });
             }
             (Phase::Move, Some(i)) => {
-                let mut role = self.fingers[i].role;
+                let mut role = std::mem::replace(&mut self.fingers[i].role, Role::Spent);
                 match &mut role {
-                    Role::Menu(gesture) => self.slide_menu(layout, gesture, at, here, &mut out),
+                    Role::Menu(gesture) => {
+                        self.slide_menu(layout, id, gesture, at, here, now, &mut out)
+                    }
                     role => self.slide(layout, role, at, now, &mut out),
                 }
                 self.fingers[i].role = role;

@@ -9,8 +9,8 @@ use horizon_client::{
     hud::HudBatch,
     keymapping::{SNEAK, SPRINT},
     touch::{
-        self as fingers, Context, Function, Here, Input, Layout, Mode, Phase, SlotKind, SlotSpot,
-        Spot, TouchEvent,
+        self as fingers, Context, Function, Here, Input, Layout, Mode, Phase, PlaceResult,
+        SlotKind, SlotSpot, Spot, TouchEvent,
     },
     widgets::{self, Kind},
 };
@@ -85,7 +85,6 @@ fn widget_here(p: (f32, f32), scale: f32) -> Here {
     Here {
         spot,
         list: list.map(|l| l.line * scale),
-        ..Here::default()
     }
 }
 
@@ -148,11 +147,10 @@ impl Game<'_> {
         };
         let p = (at[0] as f32 / batch.scale, at[1] as f32 / batch.scale);
         let mut here = widget_here(p, batch.scale);
-        if self.inventory_open() {
-            if let Some(spot) = self.inventory_spot(&batch, p) {
-                here.spot = spot;
-            }
-            here.carrying = self.carried.is_some();
+        if self.inventory_open()
+            && let Some(spot) = self.inventory_spot(&batch, p)
+        {
+            here.spot = spot;
         }
         here
     }
@@ -224,14 +222,16 @@ impl Game<'_> {
         } else {
             Mode::Playing
         };
+        let slots = self.inventory_open();
         Context {
             mode,
             scene: super::scene_id(self.scene()),
             movement: self.settings.controller.touch_movement,
             flying: self.player.as_ref().is_some_and(|p| p.flying),
             held_item_used_over_time: self.held_item_used_over_time(),
-            slots: self.inventory_open(),
+            slots,
             hud_visible: !self.ui.hide_gui,
+            carrying: slots && self.carried.is_some(),
         }
     }
 
@@ -270,6 +270,18 @@ impl Game<'_> {
         let mut changed = false;
         for input in inputs {
             let input = match input {
+                // Answered at once, also when it can't be placed: then the finger paints no
+                // more.
+                Input::PlaceOne(place) => {
+                    let result = if busy || changed {
+                        PlaceResult::Ended
+                    } else {
+                        self.inventory_place_one(event_loop, id, device_id, place.at)
+                    };
+                    self.touch.placed(place.finger, result);
+                    changed |= self.scene() != before;
+                    continue;
+                }
                 Input::Release(button) if changed => Input::Abort(button),
                 Input::Press { .. } | Input::PutDown(_) | Input::Wheel(_) | Input::Function(_)
                     if changed =>
@@ -336,6 +348,8 @@ impl Game<'_> {
                     self.inventory_put_down(event_loop, id, device_id, at);
                     Ok(())
                 }
+                // Answered before the filters above.
+                Input::PlaceOne(_) => Ok(()),
                 Input::Shift(down) => {
                     self.touch_shift(down);
                     Ok(())
@@ -473,7 +487,7 @@ impl Game<'_> {
         json!(shown)
     }
 
-    pub(super) fn draw_touch(&self, batch: &mut HudBatch) {
+    pub(super) fn draw_touch(&mut self, batch: &mut HudBatch) {
         // An F2 screenshot is of the game, not of the controls over it.
         if self.ui.screenshot_message.is_some() {
             return;
@@ -482,7 +496,27 @@ impl Game<'_> {
             let sneaking = self.toggles.is_down(SNEAK);
             self.touch
                 .draw(batch, &self.gui.atlas, &layout, sneaking, Instant::now());
+            self.draw_paint_loupe(batch, &layout);
         }
+    }
+
+    /// While a finger puts items on a slot one at a time, that slot's stack with its count on
+    /// the plate above the fingertip: the finger covers the slot itself.
+    fn draw_paint_loupe(&mut self, batch: &mut HudBatch, layout: &Layout) {
+        let Some(loupe) = self.touch.loupe(layout) else {
+            return;
+        };
+        let s = batch.scale;
+        let (x, y) = (loupe.slot[0] as f32 / s, loupe.slot[1] as f32 / s);
+        let Some(stack) = self
+            .slot_at(batch, x, y)
+            .and_then(|slot| self.slot_view(slot))
+        else {
+            return;
+        };
+        let [left, top, side, _] = loupe.square.map(|v| v / s);
+        let corner = (side - 16.0) / 2.0;
+        self.draw_item(batch, &stack, left + corner, top + corner);
     }
 
     /// `horizon-ctl touch ...`: a finger as the screen reports one, in GUI pixels.
@@ -548,6 +582,7 @@ impl Loading {
                 }
                 Input::Wheel(lines) => self.menu_wheel(lines),
                 Input::Keyboard => self.request_keyboard(),
+                Input::PlaceOne(place) => self.touch.placed(place.finger, PlaceResult::Ended),
                 // Nothing of a world or an inventory is on the title screen.
                 Input::Shift(_)
                 | Input::PutDown(_)

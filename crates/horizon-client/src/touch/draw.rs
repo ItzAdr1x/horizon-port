@@ -4,7 +4,7 @@
 
 use super::functions::Control;
 use super::layout::{Button, Cell, KNOB, Layout, Rect};
-use super::menu::{Gesture, Hold, Latch, MENU_HOLD, hold};
+use super::menu::{Gesture, Hold, Latch, hold, hold_time};
 use super::{HOLD, Mode, Movement, Role, Touch};
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use std::time::{Duration, Instant};
@@ -345,17 +345,32 @@ impl Touch {
     }
 
     /// The menu fingers' marks: the ring filling under a finger whose hold will do something,
-    /// and the drop hint above a finger that would throw a stack.
+    /// or toward a painting finger's next item with the loupe's plate above it, and the drop
+    /// hint above a finger that would throw a stack.
     fn draw_menu(&self, pen: &mut Pen<'_>, now: Instant) {
+        let (carrying, shifted) = (self.context.carrying, self.menus.shift.active());
         for finger in &self.fingers {
-            match finger.role {
+            match &finger.role {
                 Role::Menu(Gesture::Pending {
                     landed,
                     from,
                     here,
                     held: false,
-                }) if hold(&here) != Hold::Nothing => {
-                    pen.ring(from, now.duration_since(landed), MENU_HOLD);
+                }) if !matches!(hold(here, carrying, shifted), Hold::Nothing | Hold::Done) => {
+                    pen.ring(
+                        *from,
+                        now.duration_since(*landed),
+                        hold_time(here, carrying),
+                    );
+                }
+                Role::Menu(Gesture::Painting(paint)) => {
+                    if let Some((at, held, wait)) = paint.ring(now) {
+                        pen.ring(at, held, wait);
+                    }
+                    // The game draws the slot's stack over it (`Touch::loupe`).
+                    if let Some(loupe) = paint.loupe(pen.layout) {
+                        pen.plate(loupe.square, false);
+                    }
                 }
                 Role::Menu(Gesture::Pressing {
                     outside: Some(at), ..

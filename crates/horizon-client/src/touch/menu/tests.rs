@@ -52,11 +52,20 @@ fn empty(id: u32) -> Here {
     slot_of(id, false, SlotKind::Normal)
 }
 
-fn carrying(here: Here) -> Here {
-    Here {
-        carrying: true,
-        ..here
-    }
+/// The hand holds a stack (`carrying`) or not, from now on.
+fn hand(touch: &mut Touch, carrying: bool, now: Instant) {
+    let context = Context {
+        carrying,
+        ..touch.context
+    };
+    touch.frame(context, now);
+}
+
+/// A menu with a stack in hand.
+fn holding() -> (Touch, Layout, Instant) {
+    let (mut touch, layout, now) = menu();
+    hand(&mut touch, true, now);
+    (touch, layout, now)
 }
 
 fn spot(spot: Spot) -> Here {
@@ -218,22 +227,94 @@ fn a_tap_that_wanders_inside_its_slot_is_still_a_tap() {
 
 #[test]
 fn left_is_the_slot_for_slots_and_the_slop_elsewhere() {
-    let slop = 32.0;
+    // The slop is 32 pixels on this layout.
+    let layout = Layout::new(2622, 1206, 3.0);
+    let left = |landed: &Here, here: &Here, at| left(landed, A, here, at, &layout, false);
     let near = [A[0] + 20.0, A[1]];
     let far = [A[0] + 40.0, A[1]];
     let plain = Here::default();
-    assert!(!left(&plain, A, &plain, near, slop));
-    assert!(left(&plain, A, &plain, far, slop));
-    assert!(!left(&slot(3), A, &slot(3), far, slop));
-    assert!(left(&slot(3), A, &slot(4), near, slop));
-    assert!(left(&slot(3), A, &plain, near, slop));
+    assert!(!left(&plain, &plain, near));
+    assert!(left(&plain, &plain, far));
+    assert!(!left(&slot(3), &slot(3), far));
+    assert!(left(&slot(3), &slot(4), near));
+    assert!(left(&slot(3), &plain, near));
     // In a list, a slot is a row like any other: the slop decides.
     let listed = Here {
         list: Some(54.0),
         ..slot(3)
     };
-    assert!(!left(&listed, A, &listed, near, slop));
-    assert!(left(&listed, A, &listed, far, slop));
+    assert!(!left(&listed, &listed, near));
+    assert!(left(&listed, &listed, far));
+}
+
+/// A slot's pitch, 18 GUI pixels, at the test layout's GUI scale of 5.
+const PITCH: f64 = 90.0;
+
+#[test]
+fn a_carried_tap_that_rolls_into_a_gap_still_puts_the_stack_on_its_slot() {
+    let gap = [A[0] + 45.0, A[1] + 10.0];
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, gap, Here::default()), now),
+        [Input::Pointer(gap)]
+    );
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, gap, Here::default()), now),
+        [
+            Input::Pointer(A),
+            press(false),
+            Input::Release(LEFT),
+            Input::Pointer(AWAY)
+        ]
+    );
+    // With an empty hand the gap is off the slot: the stack is dragged.
+    let (mut touch, layout, now) = menu();
+    touch.on(&layout, event(1, Phase::Start, A, slot(3)), now);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, gap, Here::default()), now),
+        [Input::Pointer(A), press(true), Input::Pointer(gap)]
+    );
+}
+
+#[test]
+fn a_carried_stack_spreads_once_the_finger_really_leaves_its_slot() {
+    let background = [A[0] + PITCH + 10.0, A[1]];
+    let near = [A[0] + 20.0, A[1]];
+    for (to, over) in [
+        (background, Here::default()),
+        (near, spot(Spot::Outside)),
+        (near, empty(4)),
+    ] {
+        let (mut touch, layout, now) = holding();
+        touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+        assert_eq!(
+            touch.on(&layout, event(1, Phase::Move, to, over), now),
+            [Input::Pointer(A), press(true), Input::Pointer(to)],
+            "{over:?}"
+        );
+    }
+}
+
+#[test]
+fn a_carried_tap_lifted_beside_the_trash_is_not_shifted_by_the_latch() {
+    let (mut touch, layout, now) = inventory();
+    hand(&mut touch, true, now);
+    tap_shift(&mut touch, &layout, now);
+    let trash = slot_of(TRASH_ID, false, SlotKind::Trash);
+    let gap = [A[0] + 45.0, A[1]];
+    touch.on(&layout, event(1, Phase::Start, A, trash), now);
+    touch.on(&layout, event(1, Phase::Move, gap, Here::default()), now);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, gap, Here::default()), now),
+        [
+            Input::Pointer(A),
+            press(false),
+            Input::Release(LEFT),
+            Input::Pointer(AWAY)
+        ]
+    );
+    assert!(tap_shifted(&mut touch, &layout, 2, slot(3), now));
 }
 
 #[test]
@@ -367,23 +448,19 @@ fn a_creative_copy_is_dragged_as_the_mouse_drags_it() {
 
 #[test]
 fn a_carried_stack_dragged_across_slots_presses_on_the_first_as_it_leaves() {
-    let (mut touch, layout, now) = menu();
-    touch.on(&layout, event(1, Phase::Start, A, carrying(empty(3))), now);
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
     let inside = [A[0] + 10.0, A[1]];
     assert_eq!(
-        touch.on(
-            &layout,
-            event(1, Phase::Move, inside, carrying(empty(3))),
-            now
-        ),
+        touch.on(&layout, event(1, Phase::Move, inside, empty(3)), now),
         [Input::Pointer(inside)]
     );
     assert_eq!(
-        touch.on(&layout, event(1, Phase::Move, B, carrying(empty(4))), now),
+        touch.on(&layout, event(1, Phase::Move, B, empty(4)), now),
         [Input::Pointer(A), press(true), Input::Pointer(B)]
     );
     assert_eq!(
-        touch.on(&layout, event(1, Phase::End, B, carrying(empty(4))), now),
+        touch.on(&layout, event(1, Phase::End, B, empty(4)), now),
         [
             Input::Pointer(B),
             Input::Release(LEFT),
@@ -394,14 +471,15 @@ fn a_carried_stack_dragged_across_slots_presses_on_the_first_as_it_leaves() {
 
 #[test]
 fn a_tap_outside_with_a_stack_in_hand_throws_nothing() {
-    let (mut touch, layout, now) = menu();
-    let outside = carrying(spot(Spot::Outside));
+    let (mut touch, layout, now) = holding();
+    let outside = spot(Spot::Outside);
     touch.on(&layout, event(1, Phase::Start, A, outside), now);
     assert_eq!(
         touch.on(&layout, event(1, Phase::End, A, outside), now),
         [Input::Pointer(A), Input::Pointer(AWAY)]
     );
     // With nothing in hand there is nothing to throw, and the click is the mouse's.
+    hand(&mut touch, false, now);
     touch.on(&layout, event(2, Phase::Start, A, spot(Spot::Outside)), now);
     assert!(
         touch
@@ -412,9 +490,9 @@ fn a_tap_outside_with_a_stack_in_hand_throws_nothing() {
 
 #[test]
 fn a_tap_clicks_beyond_the_panel_by_where_it_lifts() {
-    let (mut touch, layout, now) = menu();
+    let (mut touch, layout, now) = holding();
     let near = [A[0] + 10.0, A[1]];
-    let (inside, outside) = (carrying(Here::default()), carrying(spot(Spot::Outside)));
+    let (inside, outside) = (Here::default(), spot(Spot::Outside));
     touch.on(&layout, event(1, Phase::Start, A, inside), now);
     touch.on(&layout, event(1, Phase::Move, near, outside), now);
     assert_eq!(
@@ -494,8 +572,9 @@ fn a_drag_right_after_a_tap_on_the_same_slot_is_no_double_click() {
     touch.on(&layout, event(1, Phase::Start, A, slot(3)), now);
     touch.on(&layout, event(1, Phase::End, A, slot(3)), now);
     // The tap picked the stack up; the next finger spreads it from the same slot.
-    touch.on(&layout, event(2, Phase::Start, A, carrying(empty(3))), now);
-    let moved = touch.on(&layout, event(2, Phase::Move, B, carrying(empty(4))), now);
+    hand(&mut touch, true, now);
+    touch.on(&layout, event(2, Phase::Start, A, empty(3)), now);
+    let moved = touch.on(&layout, event(2, Phase::Move, B, empty(4)), now);
     assert!(moved.contains(&press(true)) && !moved.contains(&press(false)));
 }
 
@@ -570,33 +649,40 @@ fn the_last_lift_is_where_a_carried_stack_rests() {
 
 #[test]
 fn drag_decides_from_where_it_landed() {
-    let press = |here: &Here, shifted| match drag(here, A, B, shifted) {
+    let press = |here: &Here, carrying, shifted| match drag(here, carrying, A, B, shifted) {
         Drag::Press(press) => press,
         Drag::Scroll(_) => panic!("{here:?} scrolls"),
     };
     let Spot::Slot(origin) = slot(3).spot else {
         unreachable!()
     };
-    assert_eq!(press(&slot(3), false), Press::Carry { origin, from: A });
+    assert_eq!(
+        press(&slot(3), false, false),
+        Press::Carry { origin, from: A }
+    );
     let result = slot_of(200, true, SlotKind::Result);
-    assert!(matches!(press(&result, false), Press::Carry { .. }));
-    assert_eq!(press(&empty(3), false), Press::Plain);
+    assert!(matches!(press(&result, false, false), Press::Carry { .. }));
+    assert_eq!(press(&empty(3), false, false), Press::Plain);
     let copy = slot_of(901, true, SlotKind::Display);
-    assert_eq!(press(&copy, false), Press::Plain);
-    assert_eq!(press(&carrying(empty(3)), false), Press::Spread);
-    assert_eq!(press(&carrying(slot(3)), false), Press::Spread);
-    assert_eq!(press(&carrying(spot(Spot::Outside)), false), Press::Spread);
-    assert_eq!(press(&Here::default(), false), Press::Plain);
+    assert_eq!(press(&copy, false, false), Press::Plain);
+    assert_eq!(press(&empty(3), true, false), Press::Spread);
+    assert_eq!(press(&slot(3), true, false), Press::Spread);
+    assert_eq!(press(&spot(Spot::Outside), true, false), Press::Spread);
+    assert_eq!(press(&Here::default(), false, false), Press::Plain);
     // Shifted, a stack quick-moves at the press: there is nothing to carry.
-    assert_eq!(press(&slot(3), true), Press::Plain);
-    assert_eq!(press(&carrying(empty(3)), true), Press::Spread);
+    assert_eq!(press(&slot(3), false, true), Press::Plain);
+    assert_eq!(press(&empty(3), true, true), Press::Spread);
 }
 
 const RIGHT: MouseButton = MouseButton::Right;
 
-/// The inputs of a finger that lands at `A` over `landed` and is held still past `MENU_HOLD`.
-fn long_press(landed: Here) -> (Touch, Layout, Instant, Vec<Input>) {
-    let (mut touch, layout, now) = menu();
+/// The inputs of a finger that lands at `A` over `landed` and is held still past `MENU_HOLD`,
+/// on a menu as `start` makes it.
+fn long_press(
+    start: (Touch, Layout, Instant),
+    landed: Here,
+) -> (Touch, Layout, Instant, Vec<Input>) {
+    let (mut touch, layout, now) = start;
     touch.on(&layout, event(1, Phase::Start, A, landed), now);
     let context = touch.context;
     // Play's hold is not long enough: a finger resting to read a tooltip still hovers.
@@ -614,7 +700,7 @@ const fn right_down() -> Input {
 
 #[test]
 fn a_long_press_on_a_stack_takes_half_with_the_right_button() {
-    let (mut touch, layout, now, held) = long_press(slot(3));
+    let (mut touch, layout, now, held) = long_press(menu(), slot(3));
     assert_eq!(held, [Input::Pointer(A), right_down()]);
     assert_eq!(
         touch.on(&layout, event(1, Phase::End, A, slot(3)), now),
@@ -627,54 +713,23 @@ fn a_long_press_on_a_stack_takes_half_with_the_right_button() {
 }
 
 #[test]
-fn a_long_press_with_a_stack_in_hand_places_one() {
-    let (mut touch, layout, now, held) = long_press(carrying(empty(3)));
-    assert_eq!(held, [Input::Pointer(A), right_down()]);
+fn a_long_press_beyond_the_panel_drops_one_at_once_and_no_more() {
+    let (mut touch, layout, now, held) = long_press(holding(), spot(Spot::Outside));
     assert_eq!(
-        touch.on(&layout, event(1, Phase::End, A, carrying(empty(3))), now),
-        [
-            Input::Pointer(A),
-            Input::Release(RIGHT),
-            Input::Pointer(AWAY)
-        ]
+        held,
+        [Input::Pointer(A), right_down(), Input::Release(RIGHT)]
     );
-}
-
-#[test]
-fn a_long_press_then_a_drag_places_one_per_slot() {
-    let (mut touch, layout, now, _) = long_press(carrying(empty(3)));
+    assert!(tick(&mut touch, now + Duration::from_secs(5)).is_empty());
     assert_eq!(
-        touch.on(&layout, event(1, Phase::Move, B, carrying(empty(4))), now),
-        [Input::Pointer(B)]
+        touch.on(&layout, event(1, Phase::End, A, spot(Spot::Outside)), now),
+        [Input::Pointer(A), Input::Pointer(AWAY)]
     );
-    assert_eq!(
-        touch.on(&layout, event(1, Phase::End, B, carrying(empty(4))), now),
-        [
-            Input::Pointer(B),
-            Input::Release(RIGHT),
-            Input::Pointer(AWAY)
-        ]
-    );
-}
-
-#[test]
-fn a_long_press_beyond_the_panel_drops_one_and_shows_it() {
-    let outside = carrying(spot(Spot::Outside));
-    let (touch, ..) = long_press(outside);
-    assert!(matches!(
-        touch.fingers[0].role,
-        Role::Menu(Gesture::Pressing {
-            press: Press::One,
-            outside: Some(A),
-            ..
-        })
-    ));
 }
 
 #[test]
 fn a_long_press_on_the_result_takes_one_craft_at_once() {
     let result = slot_of(200, true, SlotKind::Result);
-    let (mut touch, layout, now, held) = long_press(result);
+    let (mut touch, layout, now, held) = long_press(menu(), result);
     assert_eq!(
         held,
         [Input::Pointer(A), right_down(), Input::Release(RIGHT)]
@@ -687,7 +742,7 @@ fn a_long_press_on_the_result_takes_one_craft_at_once() {
 
 #[test]
 fn a_long_press_on_a_creative_copy_takes_a_full_stack() {
-    let (_, _, _, held) = long_press(slot_of(901, true, SlotKind::Display));
+    let (_, _, _, held) = long_press(menu(), slot_of(901, true, SlotKind::Display));
     let middle = MouseButton::Middle;
     assert_eq!(
         held,
@@ -704,7 +759,7 @@ fn a_long_press_on_a_creative_copy_takes_a_full_stack() {
 
 #[test]
 fn a_long_press_on_a_recipe_opens_its_alternatives_once() {
-    let (_, _, _, held) = long_press(spot(Spot::Secondary));
+    let (_, _, _, held) = long_press(menu(), spot(Spot::Secondary));
     assert_eq!(
         held,
         [Input::Pointer(A), right_down(), Input::Release(RIGHT)]
@@ -713,7 +768,7 @@ fn a_long_press_on_a_recipe_opens_its_alternatives_once() {
 
 #[test]
 fn a_long_press_on_a_plain_button_keeps_hovering_and_still_taps() {
-    let (mut touch, layout, now, held) = long_press(Here::default());
+    let (mut touch, layout, now, held) = long_press(menu(), Here::default());
     assert!(held.is_empty());
     assert!(matches!(
         touch.fingers[0].role,
@@ -731,38 +786,344 @@ fn a_long_press_on_a_plain_button_keeps_hovering_and_still_taps() {
 }
 
 #[test]
-fn a_cancel_during_one_per_slot_lets_the_right_button_go() {
-    let (mut touch, layout, now, _) = long_press(carrying(empty(3)));
-    touch.on(&layout, event(1, Phase::Move, B, carrying(empty(4))), now);
+fn hold_decides_from_where_it_landed() {
+    let hold = |here: &Here, carrying| hold(here, carrying, false);
+    assert_eq!(hold(&slot(3), false), Hold::Press(Press::Split));
+    assert_eq!(hold(&empty(3), false), Hold::Nothing);
+    assert_eq!(hold(&empty(3), true), Hold::Paint(3));
+    assert_eq!(hold(&slot(3), true), Hold::Paint(3));
+    assert_eq!(hold(&spot(Spot::Outside), true), Hold::Click(RIGHT));
+    assert_eq!(hold(&spot(Spot::Outside), false), Hold::Nothing);
+    let result = slot_of(200, true, SlotKind::Result);
+    assert_eq!(hold(&result, false), Hold::Click(RIGHT));
+    assert_eq!(hold(&result, true), Hold::Done);
     assert_eq!(
-        touch.on(&layout, event(1, Phase::Cancel, B, carrying(empty(4))), now),
-        [Input::Abort(RIGHT), Input::Pointer(AWAY)]
+        hold(&slot_of(200, false, SlotKind::Result), false),
+        Hold::Nothing
+    );
+    let copy = slot_of(901, true, SlotKind::Display);
+    assert_eq!(hold(&copy, false), Hold::Click(MouseButton::Middle));
+    assert_eq!(hold(&copy, true), Hold::Done);
+    let trash = slot_of(7, false, SlotKind::Trash);
+    assert_eq!(hold(&trash, false), Hold::Nothing);
+    assert_eq!(hold(&trash, true), Hold::Done);
+    assert_eq!(hold(&spot(Spot::Secondary), false), Hold::Click(RIGHT));
+    for plain in [Spot::Plain, Spot::Slider, Spot::Grab, Spot::Field] {
+        assert_eq!(hold(&spot(plain), false), Hold::Nothing);
+    }
+}
+
+/// A frame of the menu as it is, at `now`.
+fn tick(touch: &mut Touch, now: Instant) -> Vec<Input> {
+    let context = touch.context;
+    touch.frame(context, now)
+}
+
+fn ms(now: Instant, millis: u64) -> Instant {
+    now + Duration::from_millis(millis)
+}
+
+/// Finger 1's item put down at `at`.
+const fn place(at: [f64; 2]) -> Input {
+    Input::PlaceOne(PlaceOne { finger: 1, at })
+}
+
+/// Finger 1 with a stack in hand landed at `A` on empty slot 3, held still for its first item,
+/// which the game placed at the time returned.
+fn painting() -> (Touch, Layout, Instant) {
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    assert_eq!(tick(&mut touch, ms(now, 250)), [place(A)]);
+    touch.placed(1, PlaceResult::Placed);
+    (touch, layout, ms(now, 250))
+}
+
+#[test]
+fn a_quick_tap_with_a_stack_in_hand_puts_it_all_down() {
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    assert!(tick(&mut touch, ms(now, 249)).is_empty());
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, A, empty(3)), ms(now, 249)),
+        [
+            Input::Pointer(A),
+            press(false),
+            Input::Release(LEFT),
+            Input::Pointer(AWAY)
+        ]
     );
 }
 
 #[test]
-fn hold_decides_from_where_it_landed() {
-    assert_eq!(hold(&slot(3)), Hold::Press(Press::Split));
-    assert_eq!(hold(&empty(3)), Hold::Nothing);
-    assert_eq!(hold(&carrying(empty(3))), Hold::Press(Press::One));
-    assert_eq!(hold(&carrying(slot(3))), Hold::Press(Press::One));
-    assert_eq!(
-        hold(&carrying(spot(Spot::Outside))),
-        Hold::Press(Press::One)
-    );
-    assert_eq!(hold(&spot(Spot::Outside)), Hold::Nothing);
-    let result = slot_of(200, true, SlotKind::Result);
-    assert_eq!(hold(&result), Hold::Click(RIGHT));
-    assert_eq!(hold(&slot_of(200, false, SlotKind::Result)), Hold::Nothing);
-    let copy = slot_of(901, true, SlotKind::Display);
-    assert_eq!(hold(&copy), Hold::Click(MouseButton::Middle));
-    let trash = slot_of(7, false, SlotKind::Trash);
-    assert_eq!(hold(&trash), Hold::Nothing);
-    assert_eq!(hold(&carrying(trash)), Hold::Nothing);
-    assert_eq!(hold(&spot(Spot::Secondary)), Hold::Click(RIGHT));
-    for plain in [Spot::Plain, Spot::Slider, Spot::Grab, Spot::Field] {
-        assert_eq!(hold(&spot(plain)), Hold::Nothing);
+fn a_held_slot_takes_one_at_once_then_one_after_a_dwell_then_one_steadily() {
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    let mut placed = Vec::new();
+    for millis in (0..=1500).step_by(10) {
+        if tick(&mut touch, ms(now, millis)) == [place(A)] {
+            touch.placed(1, PlaceResult::Placed);
+            placed.push(millis);
+        }
     }
+    assert_eq!(placed, [250, 700, 900, 1100, 1300, 1500]);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, A, empty(3)), ms(now, 1500)),
+        [Input::Pointer(A), Input::Pointer(AWAY)]
+    );
+}
+
+#[test]
+fn a_late_frame_places_one_item_not_a_burst() {
+    let (mut touch, _, now) = painting();
+    let late = ms(now, 3000);
+    assert_eq!(tick(&mut touch, late), [place(A)]);
+    touch.placed(1, PlaceResult::Placed);
+    assert!(tick(&mut touch, late).is_empty());
+    assert!(tick(&mut touch, ms(late, 199)).is_empty());
+    assert_eq!(tick(&mut touch, ms(late, 200)), [place(A)]);
+}
+
+#[test]
+fn one_item_is_asked_for_at_a_time() {
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    assert_eq!(tick(&mut touch, ms(now, 250)), [place(A)]);
+    assert!(tick(&mut touch, ms(now, 5000)).is_empty());
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, B, empty(4)), ms(now, 5000)),
+        [Input::Pointer(B)]
+    );
+}
+
+#[test]
+fn a_slide_puts_one_on_each_new_slot_and_a_revisited_slot_waits_for_the_dwell() {
+    let (mut touch, layout, now) = painting();
+    let c = [B[0] + 100.0, B[1]];
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, B, empty(4)), now),
+        [place(B), Input::Pointer(B)]
+    );
+    touch.placed(1, PlaceResult::Placed);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, c, empty(5)), now),
+        [place(c), Input::Pointer(c)]
+    );
+    touch.placed(1, PlaceResult::Placed);
+    let back = [A[0] + 10.0, A[1]];
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, back, slot(3)), now),
+        [Input::Pointer(back)]
+    );
+    assert!(tick(&mut touch, ms(now, 449)).is_empty());
+    assert_eq!(tick(&mut touch, ms(now, 450)), [place(back)]);
+}
+
+#[test]
+fn a_gap_keeps_the_slot_and_a_pitch_of_background_lets_it_go() {
+    let (mut touch, layout, now) = painting();
+    let gap = [A[0] + 45.0, A[1]];
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, gap, Here::default()), now),
+        [Input::Pointer(gap)]
+    );
+    assert_eq!(tick(&mut touch, ms(now, 450)), [place(A)]);
+    touch.placed(1, PlaceResult::Placed);
+    let far = [A[0] + PITCH + 10.0, A[1]];
+    touch.on(&layout, event(1, Phase::Move, far, Here::default()), now);
+    assert!(tick(&mut touch, ms(now, 5000)).is_empty());
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, B, empty(4)), ms(now, 5000)),
+        [place(B), Input::Pointer(B)]
+    );
+}
+
+#[test]
+fn an_ended_painting_puts_nothing_more_down() {
+    let (mut touch, layout, now) = painting();
+    assert_eq!(tick(&mut touch, ms(now, 450)), [place(A)]);
+    touch.placed(1, PlaceResult::Ended);
+    assert!(tick(&mut touch, ms(now, 5000)).is_empty());
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, B, empty(4)), now),
+        [Input::Pointer(B)]
+    );
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, B, empty(4)), now),
+        [Input::Pointer(B), Input::Pointer(AWAY)]
+    );
+}
+
+#[test]
+fn a_painting_finger_stops_once_the_hand_is_empty() {
+    let (mut touch, layout, now) = painting();
+    hand(&mut touch, false, now);
+    hand(&mut touch, true, now);
+    assert!(tick(&mut touch, ms(now, 5000)).is_empty());
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, B, empty(4)), now),
+        [Input::Pointer(B)]
+    );
+}
+
+#[test]
+fn a_blocked_slot_takes_no_more_and_its_lift_clicks_nothing() {
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, slot(3)), now);
+    assert_eq!(tick(&mut touch, ms(now, 250)), [place(A)]);
+    touch.placed(1, PlaceResult::Blocked);
+    assert!(tick(&mut touch, ms(now, 5000)).is_empty());
+    let back = [A[0] + 10.0, A[1]];
+    touch.on(&layout, event(1, Phase::Move, B, empty(4)), now);
+    touch.placed(1, PlaceResult::Placed);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, back, slot(3)), now),
+        [Input::Pointer(back)]
+    );
+    assert!(tick(&mut touch, ms(now, 5000)).is_empty());
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, back, slot(3)), now),
+        [Input::Pointer(back), Input::Pointer(AWAY)]
+    );
+}
+
+/// How many of the touch layer's quads lie within a ring's reach of `at`.
+fn marks_near(touch: &Touch, layout: &Layout, at: [f64; 2], now: Instant) -> usize {
+    let atlas =
+        crate::hud::HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets"))
+            .unwrap();
+    let mut batch = crate::hud::HudBatch::new([2622, 1206]);
+    touch.draw(&mut batch, &atlas, layout, false, now);
+    let reach = 14.0 * layout.unit / layout.gui;
+    let (x, y) = (at[0] as f32 / layout.gui, at[1] as f32 / layout.gui);
+    batch
+        .vertices
+        .iter()
+        .filter(|v| (v.pos[0] - x).hypot(v.pos[1] - y) < reach)
+        .count()
+}
+
+#[test]
+fn the_ring_fills_toward_the_next_item_and_not_over_a_blocked_slot() {
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    assert!(marks_near(&touch, &layout, A, ms(now, 100)) > 0);
+    assert_eq!(tick(&mut touch, ms(now, 250)), [place(A)]);
+    touch.placed(1, PlaceResult::Placed);
+    assert!(marks_near(&touch, &layout, A, ms(now, 400)) > 0);
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, slot(3)), now);
+    tick(&mut touch, ms(now, 250));
+    touch.placed(1, PlaceResult::Blocked);
+    assert_eq!(marks_near(&touch, &layout, A, ms(now, 400)), 0);
+}
+
+#[test]
+fn the_loupe_shows_the_painted_slot_above_the_fingertip() {
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    assert_eq!(touch.loupe(&layout), None);
+    let (mut touch, layout, now) = painting();
+    let gap = [A[0] + 45.0, A[1]];
+    touch.on(&layout, event(1, Phase::Move, gap, Here::default()), now);
+    let loupe = touch.loupe(&layout).unwrap();
+    assert_eq!(loupe.slot, A);
+    let [x, y, w, h] = loupe.square;
+    assert!(
+        x < gap[0] as f32 && gap[0] as f32 <= x + w,
+        "over the finger: {loupe:?}"
+    );
+    assert!(
+        y + h <= gap[1] as f32 - layout.finger_clearance(),
+        "clear of the fingertip: {loupe:?}"
+    );
+    assert!(w >= 18.0 * layout.gui, "an item fits: {loupe:?}");
+    tick(&mut touch, ms(now, 450));
+    touch.placed(1, PlaceResult::Ended);
+    assert_eq!(touch.loupe(&layout), None);
+}
+
+#[test]
+fn shift_at_the_landing_keeps_the_shifted_tap_and_paints_nothing() {
+    let (mut touch, layout, now) = inventory();
+    hand(&mut touch, true, now);
+    tap_shift(&mut touch, &layout, now);
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    assert!(tick(&mut touch, ms(now, 250)).is_empty());
+    assert!(tick(&mut touch, ms(now, 900)).is_empty());
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, A, empty(3)), ms(now, 900)),
+        [
+            Input::Pointer(A),
+            Input::Shift(true),
+            press(false),
+            Input::Release(LEFT),
+            Input::Shift(false),
+            Input::Pointer(AWAY)
+        ]
+    );
+}
+
+#[test]
+fn shift_during_painting_ends_it() {
+    let (mut touch, layout, now) = inventory();
+    hand(&mut touch, true, now);
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    assert_eq!(tick(&mut touch, ms(now, 250)), [place(A)]);
+    touch.placed(1, PlaceResult::Placed);
+    tap_shift(&mut touch, &layout, ms(now, 300));
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, B, empty(4)), ms(now, 300)),
+        [Input::Pointer(B)]
+    );
+    assert!(tick(&mut touch, ms(now, 5000)).is_empty());
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, B, empty(4)), ms(now, 5000)),
+        [Input::Pointer(B), Input::Pointer(AWAY)]
+    );
+}
+
+#[test]
+fn a_carried_hold_on_a_result_a_copy_or_the_trash_does_nothing_even_at_its_lift() {
+    for landed in [
+        slot_of(200, true, SlotKind::Result),
+        slot_of(901, true, SlotKind::Display),
+        slot_of(TRASH_ID, false, SlotKind::Trash),
+    ] {
+        let (mut touch, layout, now) = holding();
+        touch.on(&layout, event(1, Phase::Start, A, landed), now);
+        assert!(tick(&mut touch, ms(now, 250)).is_empty(), "{landed:?}");
+        assert!(tick(&mut touch, ms(now, 800)).is_empty(), "{landed:?}");
+        assert_eq!(
+            touch.on(&layout, event(1, Phase::End, A, landed), ms(now, 800)),
+            [Input::Pointer(A), Input::Pointer(AWAY)],
+            "{landed:?}"
+        );
+        // A quick tap there is the mouse's click.
+        touch.on(&layout, event(2, Phase::Start, A, landed), now);
+        assert!(
+            touch
+                .on(&layout, event(2, Phase::End, A, landed), ms(now, 100))
+                .contains(&press(false))
+        );
+    }
+}
+
+#[test]
+fn a_painting_finger_has_nothing_to_undo_when_cancelled_or_the_scene_changes() {
+    let (mut touch, layout, now) = painting();
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Cancel, A, empty(3)), now),
+        [Input::Pointer(AWAY)]
+    );
+    let (mut touch, layout, now) = painting();
+    let next = next_scene(&touch);
+    assert_eq!(touch.frame(next, now), [Input::Pointer(AWAY)]);
+    assert!(tick(&mut touch, ms(now, 5000)).is_empty());
+    assert!(
+        touch
+            .on(&layout, event(1, Phase::End, A, empty(3)), now)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -905,11 +1266,12 @@ fn a_shifted_drag_from_a_stack_quick_moves_it_and_puts_nothing_down() {
 #[test]
 fn a_cancelled_shifted_drag_lets_shift_go_too() {
     let (mut touch, layout, now) = inventory();
+    hand(&mut touch, true, now);
     tap_shift(&mut touch, &layout, now);
-    touch.on(&layout, event(1, Phase::Start, A, carrying(empty(3))), now);
-    touch.on(&layout, event(1, Phase::Move, B, carrying(empty(4))), now);
+    touch.on(&layout, event(1, Phase::Start, A, empty(3)), now);
+    touch.on(&layout, event(1, Phase::Move, B, empty(4)), now);
     assert_eq!(
-        touch.on(&layout, event(1, Phase::Cancel, B, carrying(empty(4))), now),
+        touch.on(&layout, event(1, Phase::Cancel, B, empty(4)), now),
         [
             Input::Abort(LEFT),
             Input::Shift(false),
@@ -1015,13 +1377,19 @@ fn a_slider_in_a_list_moves_sideways_and_scrolls_upright() {
     let slider = listed(spot(Spot::Slider));
     let sideways = [A[0] + 60.0, A[1] + 10.0];
     let upright = [A[0] + 10.0, A[1] + 60.0];
-    assert_eq!(drag(&slider, A, sideways, false), Drag::Press(Press::Plain));
-    assert_eq!(drag(&slider, A, upright, false), Drag::Scroll(54.0));
+    assert_eq!(
+        drag(&slider, false, A, sideways, false),
+        Drag::Press(Press::Plain)
+    );
+    assert_eq!(drag(&slider, false, A, upright, false), Drag::Scroll(54.0));
     let field = listed(spot(Spot::Field));
-    assert_eq!(drag(&field, A, sideways, false), Drag::Press(Press::Plain));
+    assert_eq!(
+        drag(&field, false, A, sideways, false),
+        Drag::Press(Press::Plain)
+    );
     // Outside a list a slider is the mouse's drag whichever way it goes.
     assert_eq!(
-        drag(&spot(Spot::Slider), A, upright, false),
+        drag(&spot(Spot::Slider), false, A, upright, false),
         Drag::Press(Press::Plain)
     );
 }
@@ -1030,9 +1398,12 @@ fn a_slider_in_a_list_moves_sideways_and_scrolls_upright() {
 fn a_scrollbar_is_held_even_in_its_list() {
     let bar = listed(spot(Spot::Grab));
     let upright = [A[0], A[1] + 60.0];
-    assert_eq!(drag(&bar, A, upright, false), Drag::Press(Press::Plain));
     assert_eq!(
-        drag(&spot(Spot::Grab), A, upright, false),
+        drag(&bar, false, A, upright, false),
+        Drag::Press(Press::Plain)
+    );
+    assert_eq!(
+        drag(&spot(Spot::Grab), false, A, upright, false),
         Drag::Press(Press::Plain)
     );
 }
@@ -1041,9 +1412,9 @@ fn a_scrollbar_is_held_even_in_its_list() {
 fn a_creative_item_dragged_scrolls_the_grid_and_held_gives_a_stack() {
     let copy = listed(slot_of(901, true, SlotKind::Display));
     let upright = [A[0], A[1] + 60.0];
-    assert_eq!(drag(&copy, A, upright, false), Drag::Scroll(54.0));
-    assert_eq!(drag(&carrying(copy), A, upright, false), Drag::Scroll(54.0));
-    let (_, _, _, held) = long_press(copy);
+    assert_eq!(drag(&copy, false, A, upright, false), Drag::Scroll(54.0));
+    assert_eq!(drag(&copy, true, A, upright, false), Drag::Scroll(54.0));
+    let (_, _, _, held) = long_press(menu(), copy);
     assert!(held.contains(&Input::Release(MouseButton::Middle)));
 }
 
