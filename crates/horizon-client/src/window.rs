@@ -399,6 +399,9 @@ mod tests {
         assert_eq!(calculate_scale([1920, 1080], 0, false), 4);
         assert_eq!(calculate_scale([1920, 1080], 3, false), 3);
         assert_eq!(calculate_scale([1920, 1080], 3, true), 4);
+        // A scale larger than the window allows (the iOS keyboard took half of it) gives the
+        // largest that fits.
+        assert_eq!(calculate_scale([1920, 540], 4, false), 2);
         assert_eq!(gui_scaled_size([1921, 1081], 4), [481, 271]);
     }
     #[test]

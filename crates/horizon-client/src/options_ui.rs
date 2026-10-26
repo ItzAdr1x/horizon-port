@@ -3445,15 +3445,6 @@ mod tests {
     }
 
     #[test]
-    fn a_gui_scale_too_large_for_the_window_draws_smaller_until_it_fits_again() {
-        // The iOS keyboard takes half of a 1920x1080 window, then goes. Meanwhile the GUI draws
-        // at the largest scale that fits (Window.calculateScale); the option stays 4.
-        let drawn = [[1920, 1080], [1920, 540], [1920, 1080]]
-            .map(|window| crate::hud::gui_scale(window, 4));
-        assert_eq!(drawn, [4, 2, 4]);
-    }
-
-    #[test]
     fn classic_buttons_sound_but_disabled_and_nonprimary_clicks_are_silent() {
         let atlas = atlas();
         let mut s = Settings::default();
