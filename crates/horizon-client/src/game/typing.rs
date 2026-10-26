@@ -99,7 +99,9 @@ pub(super) fn system_input(event: &WindowEvent) -> Option<SystemInput<'_>> {
 pub(super) struct SystemKeyboard {
     wanted: bool,
     /// What the window was last asked, corrected by what it reports (`Ime::Enabled`,
-    /// `Ime::Disabled`). A hardware keyboard keeps the on-screen one away meanwhile.
+    /// `Ime::Disabled`). An ask the window refuses (`becomeFirstResponder` fails, as before the
+    /// window is key) reports nothing, so `shown` stays true. A hardware keyboard keeps the
+    /// on-screen one away meanwhile.
     shown: bool,
     /// The focused field at the last step: a change decides `wanted` again.
     field: Option<Field>,
@@ -119,8 +121,8 @@ impl SystemKeyboard {
         })
     }
     /// A tap left `field` with the focus: the keyboard is wanted while it keeps it. It is asked
-    /// for even when `shown` says the window has it: had the window given it up without an
-    /// `Ime::Disabled` reaching the app, no tap would bring it back.
+    /// for even when `shown` says the window has it: after an ask the window refused, no event
+    /// corrects `shown`, and only a tap asks again.
     fn request(&mut self, field: Option<Field>) -> Option<bool> {
         self.field = field;
         self.wanted = field.is_some();
@@ -425,10 +427,10 @@ mod tests {
     }
 
     #[test]
-    fn a_tap_asks_for_the_keyboard_even_when_a_missed_disabled_left_it_shown() {
+    fn a_tap_asks_again_for_the_keyboard_the_window_refused() {
         let mut keyboard = SystemKeyboard::default();
         assert_eq!(keyboard.step(Some(Field::Chat)), Some(true));
-        // The window gives the keyboard up, but no Ime::Disabled reaches the app.
+        // The window refuses the ask (it isn't key yet): no Ime event comes, and shown stays true.
         assert_eq!(keyboard.step(Some(Field::Chat)), None);
         assert_eq!(keyboard.request(Some(Field::Chat)), Some(true));
         assert_eq!(keyboard.step(Some(Field::Chat)), None);
