@@ -5619,7 +5619,7 @@ impl Game<'_> {
             self.draw_inventory_slots(batch, ox, oy);
             self.draw_sort_buttons(batch, ox, oy);
         }
-        self.draw_recipe_book(batch);
+        let book_tooltip = self.draw_recipe_book(batch);
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
             batch.fill(
@@ -5633,6 +5633,9 @@ impl Game<'_> {
         }
         self.draw_carried(batch);
         self.draw_slot_tooltip(batch);
+        if let Some(lines) = book_tooltip {
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+        }
         if self.container.is_none() && self.craft_size == 2 && !self.mount_active() {
             self.draw_inventory_effects(batch, (ox, oy), 176);
         }

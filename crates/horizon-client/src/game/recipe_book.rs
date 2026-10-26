@@ -1126,11 +1126,11 @@ impl Game<'_> {
     // ---- drawing ----
 
     /// The book button, ghost recipe and the open book. A book covering the menu draws alone:
-    /// the button and the ghost are the menu's (its widgets and `extractSlots`).
-    pub(super) fn draw_recipe_book(&mut self, batch: &mut HudBatch) {
-        let Some(book_type) = self.active_book() else {
-            return;
-        };
+    /// the button and the ghost are the menu's (its widgets and `extractSlots`). Returns the
+    /// tooltip of the recipe or button under the pointer, which goes over the carried stack
+    /// (`AbstractRecipeBookScreen.extractRenderState`).
+    pub(super) fn draw_recipe_book(&mut self, batch: &mut HudBatch) -> Option<Vec<(String, u32)>> {
+        let book_type = self.active_book()?;
         self.ensure_book();
         if !self.shift_down_or_ctrl() {
             self.recipe_ui.time += self.frame_ticks;
@@ -1153,10 +1153,10 @@ impl Game<'_> {
             self.draw_ghost(batch, book_type);
         }
         if !self.book_open(book_type) {
-            return;
+            return None;
         }
         self.refresh_book_view(book_type);
-        self.draw_book_panel(batch, book_type);
+        self.draw_book_panel(batch, book_type)
     }
     fn shift_down_or_ctrl(&self) -> bool {
         self.has_control_down()
@@ -1185,9 +1185,13 @@ impl Game<'_> {
         let calls = screen::ghost(self.swap_index(), ox as i32, oy as i32, big_result, &ghosts);
         self.paint_book(batch, &calls);
     }
-    /// `RecipeBookComponent.extractRenderState` and `extractTooltip`, laid
-    /// out by `horizon_client::recipe_book_screen`.
-    fn draw_book_panel(&mut self, batch: &mut HudBatch, book_type: BookType) {
+    /// `RecipeBookComponent.extractRenderState`, laid out by `horizon_client::recipe_book_screen`,
+    /// and the lines of its `extractTooltip`.
+    fn draw_book_panel(
+        &mut self,
+        batch: &mut HudBatch,
+        book_type: BookType,
+    ) -> Option<Vec<(String, u32)>> {
         let (xo, yo) = self.book_origin(batch);
         let cursor = self.cursor;
         let atlas = &self.gui.atlas;
@@ -1300,9 +1304,7 @@ impl Game<'_> {
         }
         self.recipe_ui.tab_anim.retain(|e| e.1 > 0.0);
         self.recipe_ui.button_anim.retain(|e| e.1 > 0.0);
-        if let Some(lines) = tooltip {
-            self.draw_tooltip_lines(batch, &lines, cursor.0, cursor.1);
-        }
+        tooltip
     }
     /// Paints recipe book calls; returns the first tooltip set (vanilla keeps
     /// the first one a frame asks for).
