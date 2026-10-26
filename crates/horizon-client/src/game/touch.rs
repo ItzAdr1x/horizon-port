@@ -487,10 +487,24 @@ impl Loading {
         };
         let inputs = self.touch.touch(&layout, context, event, Instant::now());
         for input in inputs {
-            if let Input::Wheel(lines) = input {
-                self.menu_wheel(lines);
-            } else if let Some(event) = mouse_event(touch.device_id, &input) {
-                self.menu_event(event_loop, event)?;
+            match input {
+                Input::Pointer(_) | Input::Press { .. } | Input::Release(_) | Input::Abort(_) => {
+                    if let Some(event) = mouse_event(touch.device_id, &input) {
+                        self.menu_event(event_loop, event)?;
+                    }
+                }
+                Input::Wheel(lines) => self.menu_wheel(lines),
+                Input::Keyboard => {}
+                // Nothing of a world or an inventory is on the title screen.
+                Input::Shift(_)
+                | Input::PutDown(_)
+                | Input::Look(_)
+                | Input::Mapping(..)
+                | Input::Sprint(_)
+                | Input::Sneak
+                | Input::Tap
+                | Input::Hotbar(_)
+                | Input::Back => {}
             }
         }
         Ok(())
