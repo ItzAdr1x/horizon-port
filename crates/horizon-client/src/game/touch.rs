@@ -36,15 +36,16 @@ fn phase(phase: TouchPhase) -> Phase {
     }
 }
 
-/// The mouse event one of the touch layer's pointer inputs stands for.
-fn mouse_event(device_id: DeviceId, input: &Input) -> Option<WindowEvent> {
+/// The mouse event one of the touch layer's pointer inputs stands for. `pick` is the mouse button
+/// the pick block mapping is bound to, which the touch layer's middle button stands for.
+fn mouse_event(device_id: DeviceId, input: &Input, pick: MouseButton) -> Option<WindowEvent> {
     let button = |button, state| WindowEvent::MouseInput {
         device_id,
         state,
         button: match button {
             fingers::MouseButton::Left => MouseButton::Left,
             fingers::MouseButton::Right => MouseButton::Right,
-            fingers::MouseButton::Middle => MouseButton::Middle,
+            fingers::MouseButton::Middle => pick,
         },
     };
     Some(match *input {
@@ -169,6 +170,9 @@ impl Game<'_> {
                 return Some(Spot::Grab);
             }
         }
+        if self.recipe_alternatives_at(p) {
+            return Some(Spot::Secondary);
+        }
         if self.clicked_outside_at(batch, p) {
             return Some(Spot::Outside);
         }
@@ -230,6 +234,9 @@ impl Game<'_> {
         device_id: DeviceId,
         inputs: Vec<Input>,
     ) {
+        let pick = horizon_client::keybinds::mouse_button(self.settings.keys.get("key.pickItem"))
+            .filter(|b| !matches!(b, MouseButton::Left | MouseButton::Right))
+            .unwrap_or(MouseButton::Middle);
         // While a world opens or saves, presses, clicks and looking are dropped; releases still
         // go, so the touch state and the game agree, and the pointer meets window_event's checks.
         let busy = self.pending_save.is_some()
@@ -271,7 +278,7 @@ impl Game<'_> {
             }
             let result = match input {
                 Input::Pointer(_) | Input::Press { .. } | Input::Release(_) | Input::Abort(_) => {
-                    if let Some(event) = mouse_event(device_id, &input) {
+                    if let Some(event) = mouse_event(device_id, &input, pick) {
                         self.window_event(event_loop, id, event);
                     }
                     Ok(())
@@ -289,7 +296,7 @@ impl Game<'_> {
                             Input::Release(left),
                         ];
                         for input in &click {
-                            if let Some(event) = mouse_event(device_id, input) {
+                            if let Some(event) = mouse_event(device_id, input, pick) {
                                 self.window_event(event_loop, id, event);
                             }
                         }
@@ -416,7 +423,7 @@ impl Loading {
         let event = touch_event(&touch, widget_here(p));
         let inputs = self.touch.touch(&layout, event, Instant::now());
         for input in inputs {
-            if let Some(event) = mouse_event(touch.device_id, &input) {
+            if let Some(event) = mouse_event(touch.device_id, &input, MouseButton::Middle) {
                 self.menu_event(event_loop, event)?;
             }
         }

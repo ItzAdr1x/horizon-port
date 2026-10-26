@@ -128,6 +128,7 @@ once a finger first touches the screen.
 | Title screen and menus | A finger is the mouse. A tap clicks where the finger lifts. A drag presses where the finger landed and follows it, so sliders drag. A touch the system takes clicks nothing |
 | Inventories: picking up and placing | Tap a stack to pick it up, and tap a slot to put it down. The stack you hold stays where your finger lifted. Double tap a stack to gather all of its kind |
 | Inventories: dragging | Drag a stack from its slot to another to move it. On a different item they swap. Lifted on a gap, it goes back. Holding a stack, drag across slots to spread it evenly. Drag a stack out of the panel to throw it; a tap out there throws nothing |
+| Inventories: long press | A ring fills under the finger, then the long press is the mouse's right button. On a stack, it takes half. With a stack in hand, it places one; drag on to place one on each slot you cross. Outside the panel, it drops one. On the crafting result, it crafts once. On a creative item, it gives a full stack. On a recipe with alternatives, it shows them |
 | Back (top left, in a world's menus) | Escape: closes the inventory and other screens, resumes from pause |
 | D-pad (bottom left) | Forward, back and the sides; the forward diagonals show while forward is held, and a thumb slides between arrows. A double tap on forward sprints. The middle toggles sneaking, and goes down while flying |
 | Jump (bottom right) | Jumps; a double tap flies in creative, and holding it goes up while flying |
