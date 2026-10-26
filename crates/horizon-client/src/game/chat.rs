@@ -469,20 +469,23 @@ impl Game<'_> {
     /// Keys while the chat screen is open.
     pub(super) fn chat_key(&mut self, event: &KeyEvent) {
         if let Some(shortcut) = self.edit_shortcut(event) {
-            let m = Measure(&self.gui.atlas.font);
-            let c = Commands {
-                dispatcher: chat_tree(&self.remote, &self.mods),
-                registries: &self.ui.registries,
-            };
-            if let Some(screen) = self.ui.chat_screen.as_mut() {
-                screen.shortcut(&m, &c, shortcut, &mut self.clipboard);
-            }
-            return;
+            return self.chat_shortcut(shortcut);
         }
         let PhysicalKey::Code(key) = event.physical_key else {
             return;
         };
         self.chat_key_code(key, event.text.as_deref());
+    }
+    /// Ctrl+A/C/V/X in the chat's input box.
+    pub(super) fn chat_shortcut(&mut self, shortcut: horizon_client::clipboard::EditShortcut) {
+        let m = Measure(&self.gui.atlas.font);
+        let c = Commands {
+            dispatcher: chat_tree(&self.remote, &self.mods),
+            registries: &self.ui.registries,
+        };
+        if let Some(screen) = self.ui.chat_screen.as_mut() {
+            screen.shortcut(&m, &c, shortcut, &mut self.clipboard);
+        }
     }
     /// A key (and the text it typed) while the chat screen is open.
     pub(super) fn chat_key_code(&mut self, key: KeyCode, typed_text: Option<&str>) {

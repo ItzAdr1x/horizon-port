@@ -937,35 +937,42 @@ impl Game<'_> {
         let PhysicalKey::Code(key) = event.physical_key else {
             return;
         };
+        if let Some(shortcut) = self.edit_shortcut(event) {
+            return self.world_options_shortcut(shortcut);
+        }
         let ctrl = self.keys.contains(&winit::keyboard::KeyCode::ControlLeft);
-        let shortcut = self.edit_shortcut(event);
         let Some(o) = self.world_options.as_mut() else {
             return;
         };
         if let Some(rules) = o.rules.as_mut().filter(|r| r.typing()) {
-            match shortcut {
-                Some(shortcut) => rules.edit(|b| {
-                    b.shortcut(shortcut, &mut self.clipboard);
-                }),
-                None => {
-                    let mut handled = false;
-                    rules.edit(|b| handled = b.key(key, ctrl, false));
-                    if !handled && !ctrl {
-                        self.world_options_text(event.text.as_deref());
-                    }
-                }
+            let mut handled = false;
+            rules.edit(|b| handled = b.key(key, ctrl, false));
+            if !handled && !ctrl {
+                self.world_options_text(event.text.as_deref());
             }
             return;
         }
         if !o.port.focused || o.view != View::Options {
             return;
         }
-        if let Some(shortcut) = shortcut {
-            o.port.shortcut(shortcut, &mut self.clipboard);
-            return;
-        }
         if !o.port.key(key, ctrl, false) && !ctrl {
             self.world_options_text(event.text.as_deref());
+        }
+    }
+    /// Ctrl+A/C/V/X in the game rules' focused box, or the port.
+    pub(super) fn world_options_shortcut(
+        &mut self,
+        shortcut: horizon_client::clipboard::EditShortcut,
+    ) {
+        let Some(o) = self.world_options.as_mut() else {
+            return;
+        };
+        if let Some(rules) = o.rules.as_mut().filter(|r| r.typing()) {
+            rules.edit(|b| {
+                b.shortcut(shortcut, &mut self.clipboard);
+            });
+        } else if o.port.focused && o.view == View::Options {
+            o.port.shortcut(shortcut, &mut self.clipboard);
         }
     }
     /// A box has the focus: the port, or the game rules' search or a number.

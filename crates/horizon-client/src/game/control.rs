@@ -546,9 +546,7 @@ impl Game<'_> {
                     focus_title_field(self.title.as_mut().ok_or("no title screen")?, name)?;
                 }
                 if args.replace {
-                    for _ in 0..64 {
-                        self.edit_field(field, Edit::Backspace);
-                    }
+                    self.clear_field(field);
                 }
                 match (field, args.text) {
                     (_, "\\b") => self.edit_field(field, Edit::Backspace),

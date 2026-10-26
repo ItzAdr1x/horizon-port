@@ -549,6 +549,14 @@ def suggestions_scenario(d, out):
     d('wait_for', condition='loaded', timeout=400)
     d('wait_ready', seconds=400)
 
+    d('key', key='t', action='tap')
+    d('type', text='x' * 200)
+    d('type', replace=True, text='/giv')
+    assert d('screen')['chat_input'] == '/giv', d('screen')['chat_input']
+    d('key', key='esc', action='tap')
+    if d('screen')['screen'] == 'chat':
+        d('key', key='esc', action='tap')
+
     cases = [
         ('/giv', '/give'),
         ('/fill ^', '/fill ^ ^'),

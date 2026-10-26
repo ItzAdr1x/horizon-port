@@ -2,6 +2,7 @@
 //! on-screen keyboard, `horizon-ctl type` and, on iOS, the system keyboard, which this module
 //! also shows and hides.
 use super::{Game, Loading, Screen, books::BookScreen};
+use horizon_client::clipboard::EditShortcut;
 use serde_json::{Value, json};
 use winit::{
     event::{Ime, WindowEvent},
@@ -260,6 +261,27 @@ impl Game<'_> {
                 _ => self.title_edit(text, backspace),
             },
         }
+    }
+
+    /// Empties `field`, whatever its length, cursor or selection, as a player does: Select All,
+    /// then Backspace. A sign empties all four lines.
+    pub(super) fn clear_field(&mut self, field: Field) {
+        let all = EditShortcut::SelectAll;
+        match field {
+            Field::Sign => return self.sign_clear(),
+            Field::Chat => self.chat_shortcut(all),
+            Field::Book => self.book_shortcut(all),
+            Field::CommandBlock => self.command_block_shortcut(all),
+            Field::CreativeSearch => self.creative_search_shortcut(all),
+            Field::RecipeSearch => self.recipe_shortcut(all),
+            Field::Anvil => self.station_shortcut(all),
+            Field::WorldOptions => self.world_options_shortcut(all),
+            Field::Options => {
+                self.options_shortcut(all);
+            }
+            Field::Title => self.title_shortcut(all),
+        }
+        self.edit_field(field, Edit::Backspace);
     }
 
     /// Once a frame: the system keyboard follows the focused field.

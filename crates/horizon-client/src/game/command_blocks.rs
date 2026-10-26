@@ -543,16 +543,25 @@ impl Game<'_> {
             KeyCode::Enter | KeyCode::NumpadEnter => return self.command_block_done(),
             _ => {}
         }
+        if let Some(shortcut) = self.edit_shortcut(event) {
+            return self.command_block_shortcut(shortcut);
+        }
         let ctrl = self.keys.contains(&KeyCode::ControlLeft);
         let shift = self.keys.contains(&KeyCode::ShiftLeft);
-        let shortcut = self.edit_shortcut(event);
         let Some(s) = self.command_block_screen.as_mut() else {
             return;
         };
-        if let Some(shortcut) = shortcut {
-            s.command.shortcut(shortcut, &mut self.clipboard);
-        } else if !s.command.key(key, ctrl, shift) && !ctrl {
+        if !s.command.key(key, ctrl, shift) && !ctrl {
             self.command_block_type(event.text.as_deref().unwrap_or(""));
+        }
+    }
+    /// Ctrl+A/C/V/X in the command box.
+    pub(super) fn command_block_shortcut(
+        &mut self,
+        shortcut: horizon_client::clipboard::EditShortcut,
+    ) {
+        if let Some(s) = self.command_block_screen.as_mut() {
+            s.command.shortcut(shortcut, &mut self.clipboard);
         }
     }
     /// Done: the command is set and the screen closes.

@@ -230,6 +230,18 @@ impl Game<'_> {
             },
         );
     }
+    /// `horizon-ctl type --replace`: each line's Select All and Backspace empty the side being
+    /// edited, and typing starts again on its first line.
+    pub(super) fn sign_clear(&mut self) {
+        for line in (0..4).rev() {
+            let Some(edit) = self.sign_edit.as_mut() else {
+                return;
+            };
+            edit.line = line;
+            self.sign_shortcut(horizon_client::clipboard::EditShortcut::SelectAll);
+            self.sign_input(Some(KeyCode::Backspace), None);
+        }
+    }
     /// Done button (`this.width / 2 - 100, this.height / 4 + 144`, 200x20).
     pub(super) fn sign_edit_click(&mut self, size: [u32; 2]) {
         let b = HudBatch::new(size);
