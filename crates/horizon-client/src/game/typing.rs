@@ -337,10 +337,6 @@ impl Loading {
     }
 
     /// A tap on a title or options field: the system keyboard comes up for it.
-    #[expect(
-        dead_code,
-        reason = "the touch layer calls it once its field taps are wired"
-    )]
     pub(super) fn request_keyboard(&mut self) {
         let show = self.keyboard.request(self.typing_field());
         show_keyboard(self.window.as_deref(), show);

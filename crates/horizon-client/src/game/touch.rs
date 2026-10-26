@@ -328,7 +328,10 @@ impl Game<'_> {
                     self.screen_wheel(0.0, lines);
                     Ok(())
                 }
-                Input::Keyboard => Ok(()),
+                Input::Keyboard => {
+                    self.request_keyboard();
+                    Ok(())
+                }
                 Input::Look([dx, dy]) => {
                     self.mouse.add_motion(dx, dy);
                     Ok(())
@@ -477,7 +480,7 @@ impl Loading {
                     }
                 }
                 Input::Wheel(lines) => self.menu_wheel(lines),
-                Input::Keyboard => {}
+                Input::Keyboard => self.request_keyboard(),
                 // Nothing of a world or an inventory is on the title screen.
                 Input::Shift(_)
                 | Input::PutDown(_)
