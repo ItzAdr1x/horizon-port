@@ -194,6 +194,25 @@ impl Chat {
         self.scroll = 0;
         self.new_since_scroll = false;
     }
+    /// The focused chat's lines as a list a finger scrolls, on a screen `height` GUI pixels
+    /// tall, while there are more than a page of them: a wheel step moves 7 lines.
+    pub fn list(&self, height: f32) -> Option<crate::widgets::List> {
+        let page = self.lines_per_page(true);
+        if self.lines.len() <= page {
+            return None;
+        }
+        let o = &self.options;
+        let scale = o.scale as f32;
+        let line = o.line_height() as f32 * scale;
+        let bottom = ((height - 40.0) / scale).floor() * scale;
+        let width = ((o.width_px() as f32 / scale).ceil() + 8.0) * scale;
+        let rows = page as f32 * line;
+        Some(crate::widgets::List {
+            rect: [0.0, bottom - rows, width, rows],
+            bar: None,
+            line: 7.0 * line,
+        })
+    }
     pub fn scroll_by(&mut self, dir: i32, focused: bool) {
         let max = self
             .lines

@@ -63,20 +63,24 @@ fn mouse_event(device_id: DeviceId, input: &Input, pick: MouseButton) -> Option<
 /// The creative screen's trash slot, which has no slot id of its own.
 const TRASH: u32 = u32::MAX;
 
-/// What last frame's widgets show at `p` (GUI pixels): sliders and text fields.
-fn widget_here(p: (f32, f32)) -> Here {
+/// What last frame's widgets show at `p` (GUI pixels, `scale` physical pixels each): a list
+/// that scrolls and its scrollbar, sliders and text fields.
+fn widget_here(p: (f32, f32), scale: f32) -> Here {
     let inside = |[x, y, w, h]: [f32; 4]| (x..x + w).contains(&p.0) && (y..y + h).contains(&p.1);
-    let spot = match widgets::last_targets()
-        .iter()
+    let list = widgets::list_at(p.0, p.1);
+    let target = widgets::last_targets()
+        .into_iter()
         .rev()
-        .find(|t| inside(t.rect))
-    {
+        .find(|t| inside(t.rect));
+    let spot = match target {
+        _ if list.and_then(|l| l.bar).is_some_and(inside) => Spot::Grab,
         Some(t) if matches!(t.kind, Kind::Slider { .. }) => Spot::Slider,
         Some(t) if t.kind == Kind::Field => Spot::Field,
         _ => Spot::Plain,
     };
     Here {
         spot,
+        list: list.map(|l| l.line * scale),
         ..Here::default()
     }
 }
@@ -138,7 +142,7 @@ impl Game<'_> {
             return Here::default();
         };
         let p = (at[0] as f32 / batch.scale, at[1] as f32 / batch.scale);
-        let mut here = widget_here(p);
+        let mut here = widget_here(p, batch.scale);
         if self.title.is_none() && matches!(self.screen, Screen::Inventory | Screen::Creative) {
             if let Some(spot) = self.inventory_spot(&batch, p) {
                 here.spot = spot;
@@ -256,7 +260,11 @@ impl Game<'_> {
         for input in inputs {
             let clicks = matches!(
                 input,
-                Input::Press { .. } | Input::Release(_) | Input::Abort(_) | Input::PutBack(_)
+                Input::Press { .. }
+                    | Input::Release(_)
+                    | Input::Abort(_)
+                    | Input::PutBack(_)
+                    | Input::Wheel(_)
             );
             if changed && clicks {
                 continue;
@@ -312,6 +320,12 @@ impl Game<'_> {
                 }
                 Input::Shift(down) => {
                     self.touch_shift(down);
+                    Ok(())
+                }
+                // A finger's lines are its own: the mouse wheel's sensitivity and Discrete
+                // Scrolling don't change how far a drag scrolls.
+                Input::Wheel(lines) => {
+                    self.screen_wheel(0.0, lines);
                     Ok(())
                 }
                 Input::Keyboard => Ok(()),
@@ -452,13 +466,46 @@ impl Loading {
             touch.location.x as f32 / scale,
             touch.location.y as f32 / scale,
         );
-        let event = touch_event(&touch, widget_here(p));
+        let event = touch_event(&touch, widget_here(p, scale));
         let inputs = self.touch.touch(&layout, event, Instant::now());
         for input in inputs {
-            if let Some(event) = mouse_event(touch.device_id, &input, MouseButton::Middle) {
+            if let Input::Wheel(lines) = input {
+                self.menu_wheel(lines);
+            } else if let Some(event) = mouse_event(touch.device_id, &input, MouseButton::Middle) {
                 self.menu_event(event_loop, event)?;
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn widgets_drawn_last_frame_say_what_a_finger_is_on() {
+        widgets::end_frame(1);
+        widgets::target_as([10.0, 10.0, 100.0, 20.0], Kind::Field);
+        let slider = Kind::Slider {
+            value: 0.5,
+            track: [10.0, 100.0],
+        };
+        widgets::target_as([10.0, 60.0, 100.0, 20.0], slider);
+        widgets::list(widgets::List {
+            rect: [0.0, 50.0, 200.0, 100.0],
+            bar: Some([150.0, 50.0, 6.0, 100.0]),
+            line: 18.0,
+        });
+        widgets::end_frame(2);
+        let at = |x, y| widget_here((x, y), 5.0);
+        assert_eq!(at(20.0, 20.0).spot, Spot::Field);
+        assert_eq!(at(20.0, 20.0).list, None);
+        assert_eq!(at(20.0, 70.0).spot, Spot::Slider);
+        assert_eq!(at(20.0, 70.0).list, Some(90.0), "a line in physical pixels");
+        assert_eq!(at(152.0, 70.0).spot, Spot::Grab);
+        assert_eq!(at(120.0, 120.0).spot, Spot::Plain);
+        assert_eq!(at(120.0, 120.0).list, Some(90.0));
+        assert_eq!(at(120.0, 170.0), Here::default());
     }
 }

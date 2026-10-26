@@ -126,6 +126,7 @@ once a finger first touches the screen.
 | Where | What it does |
 | --- | --- |
 | Title screen and menus | A finger is the mouse. A tap clicks where the finger lifts. A drag presses where the finger landed and follows it, so sliders drag. A touch the system takes clicks nothing |
+| Lists | Drag a list to scroll it: worlds, servers, options, chat, a villager's trades, the stonecutter, the loom and creative's items. A scrollbar still drags, and a slider in a list moves when you drag it sideways |
 | Inventories: picking up and placing | Tap a stack to pick it up, and tap a slot to put it down. The stack you hold stays where your finger lifted. Double tap a stack to gather all of its kind |
 | Inventories: dragging | Drag a stack from its slot to another to move it. On a different item they swap. Lifted on a gap, it goes back. Holding a stack, drag across slots to spread it evenly. Drag a stack out of the panel to throw it; a tap out there throws nothing |
 | Inventories: long press | A ring fills under the finger for half a second, then the long press is the mouse's right button. On a stack, it takes half. With a stack in hand, it places one; drag on to place one on each slot you cross. Outside the panel, it drops one. On the crafting result, it crafts once. On a creative item, it gives a full stack. On a recipe with alternatives, it shows them |

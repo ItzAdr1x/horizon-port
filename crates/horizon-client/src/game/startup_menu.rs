@@ -421,6 +421,25 @@ impl Loading {
         self.save_menu_address();
     }
 
+    /// The mouse wheel, `amount` lines after Discrete Scrolling and the wheel sensitivity, over
+    /// the title screen or its options.
+    pub(super) fn menu_wheel(&mut self, amount: f32) {
+        if self.gui.is_none() || self.menu.pending.is_some() || self.menu.win.is_some() {
+            return;
+        }
+        let batch = HudBatch::new(self.menu_size());
+        if self.menu.options_open {
+            self.menu.options.scroll_at(
+                &self.settings,
+                (batch.width, batch.height),
+                self.menu.cursor,
+                amount,
+            );
+        } else if let Some(title) = &mut self.menu.title {
+            title.scroll_worlds(amount, self.menu.cursor, (batch.width, batch.height));
+        }
+    }
+
     pub(super) fn menu_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -548,17 +567,7 @@ impl Loading {
                 } else {
                     raw
                 } * self.settings.mouse_wheel_sensitivity;
-                let batch = HudBatch::new(self.menu_size());
-                if self.menu.options_open {
-                    self.menu.options.scroll_at(
-                        &self.settings,
-                        (batch.width, batch.height),
-                        self.menu.cursor,
-                        amount,
-                    );
-                } else if let Some(title) = &mut self.menu.title {
-                    title.scroll_worlds(amount, self.menu.cursor, (batch.width, batch.height));
-                }
+                self.menu_wheel(amount);
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if event.physical_key == PhysicalKey::Code(KeyCode::F11) {

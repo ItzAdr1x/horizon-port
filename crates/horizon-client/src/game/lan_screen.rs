@@ -777,6 +777,7 @@ impl Game<'_> {
             h - FOOTER,
             o.content_height(),
             o.scroll.trunc(),
+            10.0,
         );
         ui::separators(batch, atlas, HEADER, h - FOOTER, true);
         for (b, bx, by, bw) in WorldOptions::footer(w, h) {

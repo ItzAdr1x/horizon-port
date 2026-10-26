@@ -718,6 +718,7 @@ impl GraphicsUi {
             bottom,
             content,
             self.scroll,
+            18.0,
         );
         let title = match level {
             Level::Simple => "Graphics",

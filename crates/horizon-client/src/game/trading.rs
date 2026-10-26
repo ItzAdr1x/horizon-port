@@ -666,6 +666,11 @@ impl Game<'_> {
                 ox + SHIFT + 94.0,
                 oy + 18.0 + y as f32,
             );
+            horizon_client::widgets::list(horizon_client::widgets::List {
+                rect: [ox + SHIFT + 5.0, oy + 18.0, 88.0, 140.0],
+                bar: Some([ox + SHIFT + 94.0, oy + 18.0, 6.0, 139.0]),
+                line: 20.0,
+            });
         } else {
             batch.sprite(
                 atlas,

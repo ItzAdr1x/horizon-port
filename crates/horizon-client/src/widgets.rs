@@ -50,7 +50,20 @@ impl Target {
     }
 }
 
+/// A list that scrolls, as drawn (GUI pixels): a finger dragging in it turns the wheel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct List {
+    /// Where its rows are.
+    pub rect: [f32; 4],
+    /// Its scrollbar, which a finger drags instead.
+    pub bar: Option<[f32; 4]>,
+    /// How far one wheel line moves it.
+    pub line: f32,
+}
+
 thread_local! {
+    /// Lists with something to scroll drawn since the last `end_frame`, and the last frame's.
+    static LISTS: RefCell<(Vec<List>, Vec<List>)> = const { RefCell::new((Vec::new(), Vec::new())) };
     /// Buttons drawn since the last `end_frame`, and the last frame's.
     static WIDGETS: RefCell<(Vec<Widget>, Vec<Widget>, u64)> = const { RefCell::new((Vec::new(), Vec::new(), 0)) };
     /// Every interactive rectangle (sliders, fields, list rows, the
@@ -107,6 +120,22 @@ pub fn generation() -> u64 {
     TARGETS.with_borrow(|(_, _, generation)| *generation)
 }
 
+/// A list drawn this frame that has something to scroll. Lists with `ui::scrollbar` register
+/// through it; lists with a scroller of their own call this.
+pub fn list(list: List) {
+    LISTS.with_borrow_mut(|(current, _)| {
+        if current.len() < 64 {
+            current.push(list);
+        }
+    });
+}
+
+/// The top-most list of the last drawn frame under `(x, y)`, GUI pixels.
+pub fn list_at(x: f32, y: f32) -> Option<List> {
+    let inside = |[lx, ly, w, h]: [f32; 4]| (lx..lx + w).contains(&x) && (ly..ly + h).contains(&y);
+    LISTS.with_borrow(|(_, last)| last.iter().rev().find(|l| inside(l.rect)).copied())
+}
+
 /// Called by the button drawers.
 pub fn record(label: &str, rect: [f32; 4], enabled: bool) {
     record_as(label, rect, enabled, Kind::Button);
@@ -144,6 +173,7 @@ pub fn end_frame(frames: u64) {
                 *last = std::mem::take(current);
                 *generation += 1;
             });
+            LISTS.with_borrow_mut(|(current, last)| *last = std::mem::take(current));
         }
     });
 }
@@ -401,5 +431,24 @@ mod tests {
             2,
             "the clipped row is gone, earlier ones stay"
         );
+    }
+
+    #[test]
+    fn the_top_most_list_of_the_last_frame_is_found_by_point() {
+        let at = |rect, line| List {
+            rect,
+            bar: None,
+            line,
+        };
+        end_frame(2000);
+        list(at([0.0, 0.0, 100.0, 100.0], 18.0));
+        list(at([20.0, 20.0, 40.0, 40.0], 20.0));
+        assert_eq!(list_at(30.0, 30.0), None, "not until the frame is drawn");
+        end_frame(2001);
+        assert_eq!(list_at(30.0, 30.0).map(|l| l.line), Some(20.0));
+        assert_eq!(list_at(10.0, 10.0).map(|l| l.line), Some(18.0));
+        assert_eq!(list_at(110.0, 10.0), None);
+        end_frame(2002);
+        assert_eq!(list_at(10.0, 10.0), None, "a frame without it drew none");
     }
 }

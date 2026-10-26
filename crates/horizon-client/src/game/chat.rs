@@ -687,6 +687,9 @@ impl Game<'_> {
         let draws = screen.draw(&m, mouse, blink, background);
         horizon_client::screen_draw::paint(batch, &self.gui.atlas, &draws);
         self.ui.chat_screen = Some(screen);
+        if let Some(list) = self.ui.chat.list(batch.height) {
+            horizon_client::widgets::list(list);
+        }
         // The hovered message part's tooltip, one row per line of its text.
         if let Some(hover) = self.ui.chat.hover_at(
             &self.gui.atlas.font,

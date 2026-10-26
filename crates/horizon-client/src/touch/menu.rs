@@ -88,6 +88,14 @@ pub(super) enum Gesture {
         /// Beyond the panel at this point, where lifting throws what is carried: the hint.
         outside: Option<[f64; 2]>,
     },
+    /// A list scrolls under the finger: wheel lines where it landed.
+    Scrolling {
+        from: [f64; 2],
+        last: f64,
+        /// Pixels dragged that don't make a whole line yet.
+        rest: f64,
+        line: f32,
+    },
     /// A long press clicked already: lifting only hovers away.
     Done,
     /// On the Shift button.
@@ -170,20 +178,43 @@ pub(super) fn left(landed: &Here, from: [f64; 2], here: &Here, at: [f64; 2], slo
     }
 }
 
-/// What a finger that left where it landed at `from` presses for.
-pub(super) fn drag(landed: &Here, from: [f64; 2], shifted: bool) -> Press {
-    match landed.spot {
+/// What a finger becomes once it leaves where it landed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Drag {
+    /// The mouse button goes down where it landed, for this.
+    Press(Press),
+    /// The list's wheel turns, a line every this many physical pixels.
+    Scroll(f32),
+}
+
+/// What a finger that landed at `from` and is now at `at` becomes. In a list it scrolls, but a
+/// scrollbar is held, and a slider or field moved sideways is the mouse's drag.
+pub(super) fn drag(landed: &Here, from: [f64; 2], at: [f64; 2], shifted: bool) -> Drag {
+    let sideways = (at[0] - from[0]).abs() > (at[1] - from[1]).abs();
+    Drag::Press(match (landed.list, landed.spot) {
+        (_, Spot::Grab) => Press::Plain,
+        (Some(_), Spot::Slider | Spot::Field) if sideways => Press::Plain,
+        (Some(line), _) => return Drag::Scroll(line),
         _ if landed.carrying => Press::Spread,
         // Shifted, the press quick-moves the stack away: nothing is left in hand to put down.
         _ if shifted => Press::Plain,
         // A creative item's copy has nowhere to go back to.
-        Spot::Slot(origin)
+        (None, Spot::Slot(origin))
             if origin.filled && matches!(origin.kind, SlotKind::Normal | SlotKind::Result) =>
         {
             Press::Carry { origin, from }
         }
         _ => Press::Plain,
-    }
+    })
+}
+
+/// Whole wheel lines in `dy` more pixels dragged, keeping what is left over: up (positive), the
+/// list's top coming into view, when the finger goes down.
+pub(super) fn wheel_lines(rest: &mut f64, dy: f64, line: f32) -> i32 {
+    *rest += dy;
+    let lines = (*rest / f64::from(line)).trunc();
+    *rest -= lines * f64::from(line);
+    lines as i32
 }
 
 /// A press and release of `button` where the pointer is.
@@ -230,17 +261,18 @@ impl ShiftKey {
     pub(super) fn active(&self) -> bool {
         self.held || self.latch != Latch::Off
     }
-    /// Whether a click is shifted, using Once up. `latched`: the latch may shift it; creative's
-    /// trash slot, where Shift empties the whole inventory, is shifted only by a held button.
+    /// Whether a click would be shifted. `latched`: the latch may shift it; creative's trash
+    /// slot, where Shift empties the whole inventory, is shifted only by a held button.
+    fn shifts(&self, latched: bool) -> bool {
+        if latched { self.active() } else { self.held }
+    }
+    /// Whether a click is shifted, using Once up.
     fn take(&mut self, latched: bool) -> bool {
-        if !latched {
-            return self.held;
-        }
-        let active = self.active();
-        if self.latch == Latch::Once {
+        let shifted = self.shifts(latched);
+        if latched && self.latch == Latch::Once {
             self.latch = Latch::Off;
         }
-        active
+        shifted
     }
 }
 
@@ -294,18 +326,50 @@ impl Touch {
                 out.push(Input::Pointer(at));
                 return;
             }
-            let shifted = self.shift_for(&landed);
-            let press = drag(&landed, from, shifted);
-            out.push(Input::Pointer(from));
-            press_down(out, press.button(), shifted, true);
-            *gesture = Gesture::Pressing {
-                press,
-                shifted,
-                outside: None,
-            };
+            let latched = !trash(&landed);
+            match drag(&landed, from, at, self.menus.shift.shifts(latched)) {
+                Drag::Press(press) => {
+                    let shifted = self.menus.shift.take(latched);
+                    out.push(Input::Pointer(from));
+                    press_down(out, press.button(), shifted, true);
+                    *gesture = Gesture::Pressing {
+                        press,
+                        shifted,
+                        outside: None,
+                    };
+                }
+                Drag::Scroll(line) => {
+                    // Nothing hovers while a list moves.
+                    out.push(Input::Pointer(AWAY));
+                    *gesture = Gesture::Scrolling {
+                        from,
+                        last: from[1],
+                        rest: 0.0,
+                        line,
+                    };
+                }
+            }
         }
         match gesture {
             Gesture::Shift => return,
+            Gesture::Scrolling {
+                from,
+                last,
+                rest,
+                line,
+            } => {
+                let lines = wheel_lines(rest, at[1] - *last, *line);
+                *last = at[1];
+                if lines != 0 {
+                    // The list under where the finger landed turns, one line at a time, as a
+                    // stepped list (a merchant's offers, creative's rows) takes them.
+                    out.push(Input::Pointer(*from));
+                    let step = Input::Wheel(lines.signum() as f32);
+                    out.extend(std::iter::repeat_n(step, lines.unsigned_abs() as usize));
+                    out.push(Input::Pointer(AWAY));
+                }
+                return;
+            }
             Gesture::Pressing { press, outside, .. } => {
                 *outside = (press.throws() && here.spot == Spot::Outside).then_some(at);
             }
@@ -316,8 +380,7 @@ impl Touch {
 
     /// Whether a click on where a finger landed is shifted, as the Shift button stands.
     fn shift_for(&mut self, landed: &Here) -> bool {
-        let trash = matches!(landed.spot, Spot::Slot(s) if s.kind == SlotKind::Trash);
-        self.menus.shift.take(!trash)
+        self.menus.shift.take(!trash(landed))
     }
 
     /// A menu finger lifts at `at`, over `here`.
@@ -333,6 +396,10 @@ impl Touch {
             return;
         }
         self.menus.rest = Some(at);
+        if let Gesture::Scrolling { .. } = gesture {
+            out.push(Input::Pointer(AWAY));
+            return;
+        }
         out.push(Input::Pointer(at));
         match gesture {
             // Fingers miss on a big screen, and a stack thrown into the world can't be taken
@@ -372,7 +439,7 @@ impl Touch {
                 }
             }
             Gesture::Pressing { press, shifted, .. } => release(out, press.button(), shifted),
-            Gesture::Done | Gesture::Shift => {}
+            Gesture::Scrolling { .. } | Gesture::Done | Gesture::Shift => {}
         }
         out.push(Input::Pointer(AWAY));
     }
@@ -471,6 +538,11 @@ impl Touch {
     pub fn rest(&self) -> Option<[f64; 2]> {
         self.menus.rest
     }
+}
+
+/// Creative's trash slot, which the Shift latch never reaches.
+fn trash(here: &Here) -> bool {
+    matches!(here.spot, Spot::Slot(s) if s.kind == SlotKind::Trash)
 }
 
 /// `button` goes down, Shift first when the press is shifted.
@@ -930,34 +1002,26 @@ mod tests {
 
     #[test]
     fn drag_decides_from_where_it_landed() {
-        let origin = |here: Here| match here.spot {
-            Spot::Slot(origin) => origin,
-            _ => unreachable!(),
+        let press = |here: &Here, shifted| match drag(here, A, B, shifted) {
+            Drag::Press(press) => press,
+            Drag::Scroll(_) => panic!("{here:?} scrolls"),
         };
-        assert_eq!(
-            drag(&slot(3), A, false),
-            Press::Carry {
-                origin: origin(slot(3)),
-                from: A
-            }
-        );
+        let Spot::Slot(origin) = slot(3).spot else {
+            unreachable!()
+        };
+        assert_eq!(press(&slot(3), false), Press::Carry { origin, from: A });
         let result = slot_of(200, true, SlotKind::Result);
-        assert!(matches!(drag(&result, A, false), Press::Carry { .. }));
-        assert_eq!(drag(&empty(3), A, false), Press::Plain);
-        assert_eq!(
-            drag(&slot_of(901, true, SlotKind::Display), A, false),
-            Press::Plain
-        );
-        assert_eq!(drag(&carrying(empty(3)), A, false), Press::Spread);
-        assert_eq!(drag(&carrying(slot(3)), A, false), Press::Spread);
-        assert_eq!(
-            drag(&carrying(spot(Spot::Outside)), A, false),
-            Press::Spread
-        );
-        assert_eq!(drag(&Here::default(), A, false), Press::Plain);
+        assert!(matches!(press(&result, false), Press::Carry { .. }));
+        assert_eq!(press(&empty(3), false), Press::Plain);
+        let copy = slot_of(901, true, SlotKind::Display);
+        assert_eq!(press(&copy, false), Press::Plain);
+        assert_eq!(press(&carrying(empty(3)), false), Press::Spread);
+        assert_eq!(press(&carrying(slot(3)), false), Press::Spread);
+        assert_eq!(press(&carrying(spot(Spot::Outside)), false), Press::Spread);
+        assert_eq!(press(&Here::default(), false), Press::Plain);
         // Shifted, a stack quick-moves at the press: there is nothing to carry.
-        assert_eq!(drag(&slot(3), A, true), Press::Plain);
-        assert_eq!(drag(&carrying(empty(3)), A, true), Press::Spread);
+        assert_eq!(press(&slot(3), true), Press::Plain);
+        assert_eq!(press(&carrying(empty(3)), true), Press::Spread);
     }
 
     const RIGHT: MouseButton = MouseButton::Right;
@@ -1334,5 +1398,112 @@ mod tests {
         assert!(key.take(true) && key.take(true));
         key.lift();
         assert!(!key.take(true));
+    }
+
+    fn listed(here: Here) -> Here {
+        Here {
+            list: Some(54.0),
+            ..here
+        }
+    }
+
+    #[test]
+    fn a_drag_in_a_list_turns_the_wheel_line_by_line() {
+        let (mut touch, layout, now) = menu();
+        let row = listed(Here::default());
+        let to = |dy: f64| [A[0], A[1] + dy];
+        touch.touch(&layout, event(1, Phase::Start, A, row), now);
+        // Out of the slop it scrolls: nothing hovers, and less than a line turns nothing.
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::Move, to(40.0), row), now),
+            [Input::Pointer(AWAY)]
+        );
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::Move, to(120.0), row), now),
+            [
+                Input::Pointer(A),
+                Input::Wheel(1.0),
+                Input::Wheel(1.0),
+                Input::Pointer(AWAY)
+            ]
+        );
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::Move, to(0.0), row), now),
+            [
+                Input::Pointer(A),
+                Input::Wheel(-1.0),
+                Input::Wheel(-1.0),
+                Input::Pointer(AWAY)
+            ]
+        );
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::End, to(0.0), row), now),
+            [Input::Pointer(AWAY)]
+        );
+    }
+
+    #[test]
+    fn a_slider_in_a_list_moves_sideways_and_scrolls_upright() {
+        let slider = listed(spot(Spot::Slider));
+        let sideways = [A[0] + 60.0, A[1] + 10.0];
+        let upright = [A[0] + 10.0, A[1] + 60.0];
+        assert_eq!(drag(&slider, A, sideways, false), Drag::Press(Press::Plain));
+        assert_eq!(drag(&slider, A, upright, false), Drag::Scroll(54.0));
+        let field = listed(spot(Spot::Field));
+        assert_eq!(drag(&field, A, sideways, false), Drag::Press(Press::Plain));
+        // Outside a list a slider is the mouse's drag whichever way it goes.
+        assert_eq!(
+            drag(&spot(Spot::Slider), A, upright, false),
+            Drag::Press(Press::Plain)
+        );
+    }
+
+    #[test]
+    fn a_scrollbar_is_held_even_in_its_list() {
+        let bar = listed(spot(Spot::Grab));
+        let upright = [A[0], A[1] + 60.0];
+        assert_eq!(drag(&bar, A, upright, false), Drag::Press(Press::Plain));
+        assert_eq!(
+            drag(&spot(Spot::Grab), A, upright, false),
+            Drag::Press(Press::Plain)
+        );
+    }
+
+    #[test]
+    fn a_creative_item_dragged_scrolls_the_grid_and_held_gives_a_stack() {
+        let copy = listed(slot_of(901, true, SlotKind::Display));
+        let upright = [A[0], A[1] + 60.0];
+        assert_eq!(drag(&copy, A, upright, false), Drag::Scroll(54.0));
+        assert_eq!(drag(&carrying(copy), A, upright, false), Drag::Scroll(54.0));
+        let (_, _, _, held) = long_press(copy);
+        assert!(held.contains(&Input::Release(MouseButton::Middle)));
+    }
+
+    #[test]
+    fn a_scroll_leaves_the_shift_latch_for_the_next_click() {
+        let (mut touch, layout, now) = inventory();
+        tap_shift(&mut touch, &layout, now);
+        let row = listed(slot_of(901, true, SlotKind::Display));
+        touch.touch(&layout, event(1, Phase::Start, A, row), now);
+        let moved = touch.touch(
+            &layout,
+            event(1, Phase::Move, [A[0], A[1] + 120.0], row),
+            now,
+        );
+        assert!(!moved.contains(&Input::Shift(true)), "{moved:?}");
+        touch.touch(&layout, event(1, Phase::End, A, row), now);
+        assert!(tap_shifted(&mut touch, &layout, 2, slot(3), now));
+    }
+
+    #[test]
+    fn wheel_lines_keep_the_remainder_both_ways() {
+        let mut rest = 0.0;
+        assert_eq!(wheel_lines(&mut rest, 30.0, 20.0), 1);
+        assert_eq!(rest, 10.0);
+        assert_eq!(wheel_lines(&mut rest, 5.0, 20.0), 0);
+        assert_eq!(wheel_lines(&mut rest, 30.0, 20.0), 2);
+        assert_eq!(rest, 5.0);
+        assert_eq!(wheel_lines(&mut rest, -50.0, 20.0), -2);
+        assert_eq!(rest, -5.0);
     }
 }

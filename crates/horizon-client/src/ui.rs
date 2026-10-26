@@ -552,7 +552,10 @@ impl Scroll {
     }
 }
 
-/// Vertical scroll bar (AbstractScrollArea): background and scroller sprites.
+/// Vertical scroll bar (AbstractScrollArea): background and scroller sprites. A list with
+/// something to scroll registers here (`widgets::list`) across the screen's width, `line` its
+/// wheel's pixels per line, so a finger dragging its rows scrolls it.
+#[allow(clippy::too_many_arguments)]
 pub fn scrollbar(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
@@ -561,11 +564,17 @@ pub fn scrollbar(
     bottom: f32,
     content: f32,
     scroll: f32,
+    line: f32,
 ) {
     let Some((y, bar)) = scrollbar_thumb(top, bottom, content, scroll) else {
         return;
     };
     let height = bottom - top;
+    crate::widgets::list(crate::widgets::List {
+        rect: [0.0, top, batch.width, height],
+        bar: Some([x, top, 6.0, height]),
+        line,
+    });
     nine_slice(
         batch,
         atlas,
@@ -1478,5 +1487,22 @@ mod tests {
         e.insert_text("é§x");
         assert_eq!(e.value, "éx worl");
         assert_eq!(e.cursor, 2);
+    }
+
+    #[test]
+    fn a_scrollbar_registers_its_list_only_with_something_to_scroll() {
+        let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let mut batch = HudBatch::new([854, 480]);
+        let frame = |n| crate::widgets::end_frame(n);
+        frame(1000);
+        scrollbar(&mut batch, &atlas, 300.0, 30.0, 130.0, 90.0, 0.0, 18.0);
+        frame(1001);
+        assert_eq!(crate::widgets::list_at(100.0, 80.0), None);
+        scrollbar(&mut batch, &atlas, 300.0, 30.0, 130.0, 400.0, 0.0, 18.0);
+        frame(1002);
+        let list = crate::widgets::list_at(100.0, 80.0).expect("a list to scroll");
+        assert_eq!(list.line, 18.0);
+        assert_eq!(list.bar, Some([300.0, 30.0, 6.0, 100.0]));
+        assert_eq!(crate::widgets::list_at(100.0, 140.0), None);
     }
 }

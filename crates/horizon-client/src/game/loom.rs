@@ -317,6 +317,13 @@ impl Game<'_> {
     ) -> Option<Vec<(String, u32)>> {
         let s = self.station.as_ref()?;
         let l = &s.loom;
+        if l.display && l.offscreen_rows() > 0 {
+            horizon_client::widgets::list(horizon_client::widgets::List {
+                rect: [ox + 60.0, oy + 13.0, 4.0 * BUTTON, 4.0 * BUTTON],
+                bar: Some([ox + 119.0, oy + 9.0, 12.0, 56.0]),
+                line: BUTTON,
+            });
+        }
         let dye = s.inputs[1]
             .as_ref()
             .and_then(|d| self.res.items().get(&d.item))

@@ -6108,6 +6108,45 @@ impl Game<'_> {
         }
         done
     }
+    /// The mouse wheel over the title screen or a menu, `dy` lines (`dx` sideways) after
+    /// Discrete Scrolling and the wheel sensitivity.
+    pub(super) fn screen_wheel(&mut self, dx: f32, d: f32) {
+        if let Some(title) = &mut self.title
+            && self.screen != Screen::Win
+        {
+            let size = self
+                .window
+                .as_ref()
+                .map(|w| w.inner_size())
+                .unwrap_or_default();
+            let batch = HudBatch::new([size.width, size.height]);
+            title.scroll_worlds(d, self.cursor, (batch.width, batch.height));
+        }
+        if self.screen == Screen::Chat && d != 0.0 {
+            self.chat_scroll(d);
+        }
+        if self.screen == Screen::Options && d != 0.0 {
+            self.options_scroll(d);
+        }
+        if self.screen == Screen::Creative && d != 0.0 {
+            self.creative_screen.wheel(f64::from(d), &self.pack.names);
+        }
+        if self.screen == Screen::Inventory
+            && d != 0.0
+            && !self.tweak_scroll(d, self.inventory_target().0)
+        {
+            self.station_scroll(d);
+        }
+        if self.screen == Screen::Stats && d != 0.0 {
+            self.stats_scroll(d);
+        }
+        if self.screen == Screen::WorldOptions && d != 0.0 {
+            self.world_options_scroll(d);
+        }
+        if self.screen == Screen::Advancements {
+            self.advancements_scroll(dx, d);
+        }
+    }
     /// The plain inventory mouse press: starts a quick craft drag when a
     /// stack is held, gathers on a double click, else the normal click.
     fn inventory_press(&mut self, right: bool) {
@@ -9436,6 +9475,18 @@ impl Game<'_> {
             batch.height,
             rgba(16, 16, 16, 160),
         );
+        if self.creative_screen.can_scroll(&self.pack.names) {
+            horizon_client::widgets::list(horizon_client::widgets::List {
+                rect: [ox + 9.0, oy + 18.0, 9.0 * 18.0, 5.0 * 18.0],
+                bar: Some([
+                    ox + Creative::SCROLL_X,
+                    oy + Creative::SCROLL_Y,
+                    Creative::SCROLL_WIDTH,
+                    Creative::SCROLL_HEIGHT,
+                ]),
+                line: 18.0,
+            });
+        }
         // Unselected tabs behind the panel, then the panel, then the selected tab.
         for (i, t) in tabs.iter().enumerate() {
             if i != selected {
@@ -10976,17 +11027,6 @@ impl ApplicationHandler for Game<'_> {
                         }) * wheel_sensitivity
                     };
                     let d = scaled(raw_y) as f32;
-                    if let Some(title) = &mut self.title
-                        && self.screen != Screen::Win
-                    {
-                        let size = self
-                            .window
-                            .as_ref()
-                            .map(|w| w.inner_size())
-                            .unwrap_or_default();
-                        let batch = HudBatch::new([size.width, size.height]);
-                        title.scroll_worlds(d, self.cursor, (batch.width, batch.height));
-                    }
                     if self.screen == Screen::Playing
                         && self.sleeping.is_none()
                         && self.player.is_some()
@@ -11011,30 +11051,7 @@ impl ApplicationHandler for Game<'_> {
                                 ) as usize;
                         }
                     }
-                    if self.screen == Screen::Chat && d != 0.0 {
-                        self.chat_scroll(d);
-                    }
-                    if self.screen == Screen::Options && d != 0.0 {
-                        self.options_scroll(d);
-                    }
-                    if self.screen == Screen::Creative && d != 0.0 {
-                        self.creative_screen.wheel(f64::from(d), &self.pack.names);
-                    }
-                    if self.screen == Screen::Inventory
-                        && d != 0.0
-                        && !self.tweak_scroll(d, self.inventory_target().0)
-                    {
-                        self.station_scroll(d);
-                    }
-                    if self.screen == Screen::Stats && d != 0.0 {
-                        self.stats_scroll(d);
-                    }
-                    if self.screen == Screen::WorldOptions && d != 0.0 {
-                        self.world_options_scroll(d);
-                    }
-                    if self.screen == Screen::Advancements {
-                        self.advancements_scroll(scaled(raw_x) as f32, d);
-                    }
+                    self.screen_wheel(scaled(raw_x) as f32, d);
                 }
                 WindowEvent::MouseInput { state, button, .. }
                     if self.server_packs.prompt.is_some() =>

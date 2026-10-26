@@ -2279,7 +2279,7 @@ impl OptionsUi {
         if list {
             ui::separators(batch, atlas, top, bottom, in_world);
             let sx = self.scrollbar_x(w);
-            ui::scrollbar(batch, atlas, sx, top, bottom, content, self.scroll);
+            ui::scrollbar(batch, atlas, sx, top, bottom, content, self.scroll, 18.0);
         }
         if self.page() == Page::Language {
             let mut search = self.language_search.clone();

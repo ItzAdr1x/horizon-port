@@ -124,6 +124,8 @@ pub enum Input {
     /// The mouse button goes up, and its release must click nothing: the touch was cancelled, or
     /// the screen changed under it.
     Abort(MouseButton),
+    /// The mouse wheel turns this many lines where the pointer is, up when positive.
+    Wheel(f32),
     /// Shift goes down or up, as the physical key a keyboard's Shift is (`has_shift_down`).
     Shift(bool),
     /// If the hand holds a stack now, a left click here (physical pixels): a dropped stack's

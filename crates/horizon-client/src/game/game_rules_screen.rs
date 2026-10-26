@@ -431,6 +431,7 @@ impl RulesScreen {
             h - FOOTER,
             content,
             self.scroll.trunc(),
+            ROW / 2.0,
         );
         // The header: the title centred over the search box.
         let title = Text::translate("editGamerule.title", &[]);
