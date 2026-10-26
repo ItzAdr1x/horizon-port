@@ -98,6 +98,21 @@ impl RecipeUi {
         }
         self.view_key = 0;
     }
+    /// Puts the search box on the panel at (`xo`, `yo`), for clicks and typing. A finger's tap
+    /// there asks for the keyboard, except under the alternatives overlay, which takes every
+    /// click.
+    fn place_search(&mut self, xo: f32, yo: f32) -> Option<&mut EditBox> {
+        let edit = self.search.as_mut()?;
+        edit.x = xo + 25.0;
+        edit.y = yo + 13.0;
+        if self.overlay.is_none() {
+            horizon_client::widgets::target_as(
+                [edit.x, edit.y, edit.width, edit.height],
+                horizon_client::widgets::Kind::Field,
+            );
+        }
+        Some(edit)
+    }
 }
 
 fn inside(p: (f32, f32), x: f32, y: f32, w: f32, h: f32) -> bool {
@@ -1064,19 +1079,10 @@ impl Game<'_> {
     /// out by `horizon_client::recipe_book_screen`.
     fn draw_book_panel(&mut self, batch: &mut HudBatch, book_type: BookType) {
         let (xo, yo) = self.book_origin(batch);
-        // The search box, 81 by 14 (`recipe_book_screen::search_box`): a finger's tap there
-        // asks for the keyboard.
-        horizon_client::widgets::target_as(
-            [xo + 25.0, yo + 13.0, 81.0, 14.0],
-            horizon_client::widgets::Kind::Field,
-        );
         let cursor = self.cursor;
         let atlas = &self.gui.atlas;
-        let search = match self.recipe_ui.search.as_mut() {
+        let search = match self.recipe_ui.place_search(xo, yo) {
             Some(edit) => {
-                // The box's place, for clicks and typing.
-                edit.x = xo + 25.0;
-                edit.y = yo + 13.0;
                 let (display, blink_ms) = edit.view_state(atlas);
                 Search {
                     value: edit.value.clone(),
@@ -1336,5 +1342,42 @@ fn sub_rect(r: Rect, [x, y, w, h]: [f32; 4]) -> Rect {
         v1: r.v0 + (y + h) * dv,
         w: w as u32,
         h: h as u32,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Overlay, RecipeUi};
+    use horizon_client::{
+        ui::EditBox,
+        widgets::{self, Kind},
+    };
+
+    fn fields(ui: &mut RecipeUi) -> Vec<[f32; 4]> {
+        widgets::end_frame(u64::MAX - 1);
+        ui.place_search(100.0, 50.0);
+        widgets::end_frame(u64::MAX);
+        widgets::last_targets()
+            .into_iter()
+            .filter(|t| t.kind == Kind::Field)
+            .map(|t| t.rect)
+            .collect()
+    }
+
+    #[test]
+    fn the_search_box_takes_a_tap_unless_the_alternatives_cover_it() {
+        let mut ui = RecipeUi {
+            search: Some(EditBox::new(0.0, 0.0, 81.0, 14.0)),
+            ..RecipeUi::default()
+        };
+        assert_eq!(fields(&mut ui), vec![[125.0, 63.0, 81.0, 14.0]]);
+        ui.overlay = Some(Overlay {
+            x: 0.0,
+            y: 0.0,
+            entries: vec![(0, true)],
+        });
+        assert_eq!(fields(&mut ui), Vec::<[f32; 4]>::new());
+        let edit = ui.search.as_ref().unwrap();
+        assert_eq!((edit.x, edit.y), (125.0, 63.0), "clicks still find the box");
     }
 }
