@@ -23,9 +23,11 @@ large_enum_variant = "allow"
 # folder once a wgpu release has the fix.
 # winit 0.30.13 with the UIScene life cycle on iOS: apps built with the iOS 27 SDK don't launch
 # without it, and no winit 0.30 release has it. The app launches when UIKit connects its scene,
-# windows are made in that scene, and `inner_size` is the whole window, as `Resized` reports it,
-# not its safe area (src/platform_impl/ios/{app_state,event_loop,window}.rs). Drop this and the
-# folder once Horizon moves to a winit with scenes.
+# windows are made in that scene, and `inner_size` is the view, as `Resized` reports it, not its
+# safe area (src/platform_impl/ios/{app_state,event_loop,window}.rs). With the system keyboard
+# up, the view keeps to the part of the window above it, so `Resized` lays the game out where it
+# can be seen, and typed text is not corrected, capitalized or given curly quotes (view.rs).
+# Drop this and the folder once Horizon moves to a winit with scenes and both keyboard changes.
 [patch.crates-io]
 wgpu-hal = { path = "third_party/wgpu-hal" }
 winit = { path = "third_party/winit" }

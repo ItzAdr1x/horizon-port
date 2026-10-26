@@ -1,18 +1,28 @@
 #![allow(clippy::unnecessary_cast)]
 use std::cell::{Cell, RefCell};
 
-use objc2::rc::Retained;
-use objc2::runtime::{NSObjectProtocol, ProtocolObject};
-use objc2::{declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass};
-use objc2_foundation::{CGFloat, CGPoint, CGRect, MainThreadMarker, NSObject, NSSet, NSString};
+use objc2::rc::{Retained, WeakId};
+use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
+use objc2::{
+    class, declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass,
+};
+use objc2_foundation::{
+    CGFloat, CGPoint, CGRect, MainThreadMarker, NSNotification, NSNotificationCenter, NSObject,
+    NSSet, NSString,
+};
 use objc2_ui_kit::{
     UICoordinateSpace, UIEvent, UIForceTouchCapability, UIGestureRecognizer,
-    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIKeyInput, UIPanGestureRecognizer,
-    UIPinchGestureRecognizer, UIResponder, UIRotationGestureRecognizer, UITapGestureRecognizer,
-    UITextInputTraits, UITouch, UITouchPhase, UITouchType, UITraitEnvironment, UIView,
+    UIGestureRecognizerDelegate, UIGestureRecognizerState, UIKeyInput,
+    UIKeyboardFrameEndUserInfoKey, UIKeyboardWillChangeFrameNotification,
+    UIKeyboardWillHideNotification, UIPanGestureRecognizer, UIPinchGestureRecognizer,
+    UIResponder, UIRotationGestureRecognizer, UITapGestureRecognizer,
+    UITextAutocapitalizationType, UITextAutocorrectionType, UITextInputTraits,
+    UITextSmartDashesType, UITextSmartInsertDeleteType, UITextSmartQuotesType,
+    UITextSpellCheckingType, UITouch, UITouchPhase, UITouchType, UITraitEnvironment, UIView,
 };
 
 use super::app_state::{self, EventWrapper};
+use super::notification_center::create_observer;
 use super::window::WinitUIWindow;
 use crate::dpi::PhysicalPosition;
 use crate::event::{ElementState, Event, Force, KeyEvent, Touch, TouchPhase, WindowEvent};
@@ -31,6 +41,21 @@ pub struct WinitViewState {
     rotation_last_delta: Cell<CGFloat>,
     pinch_last_delta: Cell<CGFloat>,
     pan_last_delta: Cell<CGPoint>,
+
+    /// The height of the window's bottom a docked system keyboard covers: the view keeps above
+    /// it, so `Resized` lays the app out where it can be seen. 0 while the keyboard is hidden,
+    /// floating or split.
+    keyboard_overlap: Cell<CGFloat>,
+    keyboard_observers: RefCell<Vec<Retained<NSObject>>>,
+}
+
+impl Drop for WinitViewState {
+    fn drop(&mut self) {
+        let center = unsafe { NSNotificationCenter::defaultCenter() };
+        for observer in self.keyboard_observers.take() {
+            unsafe { center.removeObserver(&observer) };
+        }
+    }
 }
 
 declare_class!(
@@ -69,9 +94,11 @@ declare_class!(
 
             let window = self.window().unwrap();
             let window_bounds = window.bounds();
+            let mut frame = window_bounds;
+            frame.size.height = (frame.size.height - self.ivars().keyboard_overlap.get()).max(0.0);
             let screen = window.screen();
             let screen_space = screen.coordinateSpace();
-            let screen_frame = self.convertRect_toCoordinateSpace(window_bounds, &screen_space);
+            let screen_frame = self.convertRect_toCoordinateSpace(frame, &screen_space);
             let scale_factor = screen.scale();
             let size = crate::dpi::LogicalSize {
                 width: screen_frame.size.width as f64,
@@ -81,10 +108,19 @@ declare_class!(
 
             // If the app is started in landscape, the view frame and window bounds can be mismatched.
             // The view frame will be in portrait and the window bounds in landscape. So apply the
-            // window bounds to the view frame to make it consistent.
+            // window bounds, less a docked keyboard, to the view frame to make it consistent.
             let view_frame = self.frame();
-            if view_frame != window_bounds {
-                self.setFrame(window_bounds);
+            if view_frame != frame {
+                // raw-window-metal's Metal layer follows the view's bounds, and a layer's frame
+                // animates for a quarter second by default, stretching the last picture meanwhile.
+                unsafe {
+                    let _: () = msg_send![class!(CATransaction), begin];
+                    let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+                }
+                self.setFrame(frame);
+                unsafe {
+                    let _: () = msg_send![class!(CATransaction), commit];
+                }
             }
 
             app_state::handle_nonuser_event(
@@ -332,7 +368,38 @@ declare_class!(
         }
     }
 
+    // Typed text reaches the app as typed: commands and names need no corrections, capitals or
+    // curly quotes.
     unsafe impl UITextInputTraits for WinitView {
+        #[method(autocapitalizationType)]
+        fn autocapitalization_type(&self) -> UITextAutocapitalizationType {
+            UITextAutocapitalizationType::None
+        }
+
+        #[method(autocorrectionType)]
+        fn autocorrection_type(&self) -> UITextAutocorrectionType {
+            UITextAutocorrectionType::No
+        }
+
+        #[method(spellCheckingType)]
+        fn spell_checking_type(&self) -> UITextSpellCheckingType {
+            UITextSpellCheckingType::No
+        }
+
+        #[method(smartQuotesType)]
+        fn smart_quotes_type(&self) -> UITextSmartQuotesType {
+            UITextSmartQuotesType::No
+        }
+
+        #[method(smartDashesType)]
+        fn smart_dashes_type(&self) -> UITextSmartDashesType {
+            UITextSmartDashesType::No
+        }
+
+        #[method(smartInsertDeleteType)]
+        fn smart_insert_delete_type(&self) -> UITextSmartInsertDeleteType {
+            UITextSmartInsertDeleteType::No
+        }
     }
 
     unsafe impl UIKeyInput for WinitView {
@@ -368,10 +435,27 @@ impl WinitView {
             rotation_last_delta: Cell::new(0.0),
             pinch_last_delta: Cell::new(0.0),
             pan_last_delta: Cell::new(CGPoint { x: 0.0, y: 0.0 }),
+
+            keyboard_overlap: Cell::new(0.0),
+            keyboard_observers: RefCell::new(Vec::new()),
         });
         let this: Retained<Self> = unsafe { msg_send_id![super(this), initWithFrame: frame] };
 
         this.setMultipleTouchEnabled(true);
+
+        let center = unsafe { NSNotificationCenter::defaultCenter() };
+        let observers = unsafe {
+            [UIKeyboardWillChangeFrameNotification, UIKeyboardWillHideNotification]
+        }
+        .map(|name| {
+            let view = WeakId::new(&*this);
+            create_observer(&center, name, move |notification| {
+                if let Some(view) = view.load() {
+                    view.keyboard_changed(notification);
+                }
+            })
+        });
+        this.ivars().keyboard_observers.replace(observers.into());
 
         if let Some(scale_factor) = window_attributes.platform_specific.scale_factor {
             this.setContentScaleFactor(scale_factor as _);
@@ -383,6 +467,41 @@ impl WinitView {
     fn window(&self) -> Option<Retained<WinitUIWindow>> {
         // SAFETY: `WinitView`s are always installed in a `WinitUIWindow`
         (**self).window().map(|window| unsafe { Retained::cast(window) })
+    }
+
+    /// The system keyboard will move or go: the view keeps to the part of the window above a
+    /// keyboard docked at its bottom, as `keyboardLayoutGuide` keeps an app's content.
+    fn keyboard_changed(&self, notification: &NSNotification) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        let hiding = unsafe { &*notification.name() == UIKeyboardWillHideNotification };
+        let end = unsafe { notification.userInfo() }.and_then(|info| {
+            let key: &AnyObject = unsafe { UIKeyboardFrameEndUserInfoKey }.as_ref();
+            let frame: Option<Retained<AnyObject>> =
+                unsafe { msg_send_id![&info, objectForKey: key] };
+            frame.map(|frame| -> CGRect { unsafe { msg_send![&frame, CGRectValue] } })
+        });
+        let overlap = match end {
+            Some(end) if !hiding => {
+                // The end frame is in the screen's coordinates.
+                let screen_space = window.screen().coordinateSpace();
+                let end = window.convertRect_fromCoordinateSpace(end, &screen_space);
+                let bounds = window.bounds();
+                let bottom = bounds.origin.y + bounds.size.height;
+                let docked = end.size.width >= bounds.size.width - 1.0
+                    && end.origin.y + end.size.height >= bottom - 1.0;
+                if docked {
+                    (bottom - end.origin.y).clamp(0.0, bounds.size.height)
+                } else {
+                    0.0
+                }
+            },
+            _ => 0.0,
+        };
+        if self.ivars().keyboard_overlap.replace(overlap) != overlap {
+            unsafe { self.setNeedsLayout() };
+        }
     }
 
     pub(crate) fn recognize_pinch_gesture(&self, should_recognize: bool) {

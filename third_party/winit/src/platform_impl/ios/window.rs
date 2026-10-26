@@ -183,10 +183,14 @@ impl Inner {
         self.window.setBounds(bounds);
     }
 
-    /// The whole window, as `Resized` reports it, not its safe area: a surface made that size
-    /// is stretched over the view, which fills the window.
+    /// The view, as `Resized` reports it, not its safe area: the window less the part a docked
+    /// system keyboard covers. A surface made that size fills the view.
     pub fn inner_size(&self) -> PhysicalSize<u32> {
-        self.outer_size()
+        let scale_factor = self.scale_factor();
+        let screen_space = self.window.screen().coordinateSpace();
+        let frame = self.view.convertRect_toCoordinateSpace(self.view.bounds(), &screen_space);
+        let size = LogicalSize { width: frame.size.width as f64, height: frame.size.height as f64 };
+        size.to_physical(scale_factor)
     }
 
     pub fn outer_size(&self) -> PhysicalSize<u32> {
