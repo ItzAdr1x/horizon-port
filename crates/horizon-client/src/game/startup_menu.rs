@@ -443,9 +443,9 @@ impl Loading {
         }
     }
 
-    /// An edit typed into the startup menu's focused field, as the key that makes it would.
-    pub(super) fn type_into_field(&mut self, edit: Edit) {
-        let (Some(field), Some(gui)) = (self.typing_field(), &self.gui) else {
+    /// An edit typed into `field`, as the key that makes it would.
+    pub(super) fn edit_field(&mut self, field: Field, edit: Edit) {
+        let Some(gui) = &self.gui else {
             return;
         };
         let atlas = &gui.atlas;
@@ -719,6 +719,7 @@ impl Loading {
 
 #[cfg(test)]
 mod tests {
+    use super::super::typing::SystemInput;
     use super::*;
 
     fn gui(root: &std::path::Path) -> UiResources {
@@ -772,7 +773,7 @@ mod tests {
         };
         assert_eq!(loading.typing_field(), Some(Field::Title));
         for text in ["M", "y", " ", "w"] {
-            loading.system_keyboard_text(text);
+            loading.system_keyboard_input(SystemInput::Typed(Some(text)));
         }
         let title = loading.menu.title.as_ref().unwrap();
         let horizon_client::title::Mode::Create { name, .. } = &title.mode else {

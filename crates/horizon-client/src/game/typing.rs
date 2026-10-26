@@ -3,7 +3,11 @@
 //! also shows and hides.
 use super::{Game, Loading, Screen, books::BookScreen};
 use serde_json::{Value, json};
-use winit::{keyboard::KeyCode, window::Window};
+use winit::{
+    event::{Ime, WindowEvent},
+    keyboard::{KeyCode, PhysicalKey},
+    window::Window,
+};
 
 /// A text field with the keyboard's focus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,11 +52,40 @@ pub(super) enum Edit {
     Enter,
 }
 
-/// The system keyboard: whether the player wants it and whether the window was asked to show
-/// it, kept to the focused field. Only iOS has one: elsewhere nothing reaches the window.
+/// What the system keyboard tells the window, which the screens' handlers don't know.
+pub(super) enum SystemInput<'a> {
+    /// Typed text (`insertText:`), as a key no keyboard has: the text of its press, none for its
+    /// release.
+    Typed(Option<&'a str>),
+    /// The window took the keyboard or gave it up (`Ime::Enabled`, `Ime::Disabled`), whoever
+    /// asked: the iPad's hide key gives it up.
+    Shown(bool),
+}
+
+/// The system keyboard's input among the window's events. Only iOS has one.
+pub(super) fn system_input(event: &WindowEvent) -> Option<SystemInput<'_>> {
+    if !cfg!(target_os = "ios") {
+        return None;
+    }
+    match event {
+        WindowEvent::KeyboardInput { event, .. }
+            if matches!(event.physical_key, PhysicalKey::Unidentified(_)) =>
+        {
+            Some(SystemInput::Typed(event.text.as_deref()))
+        }
+        WindowEvent::Ime(Ime::Enabled) => Some(SystemInput::Shown(true)),
+        WindowEvent::Ime(Ime::Disabled) => Some(SystemInput::Shown(false)),
+        _ => None,
+    }
+}
+
+/// The system keyboard: whether the player wants it and whether the window has it, kept to the
+/// focused field.
 #[derive(Debug, Default)]
 pub(super) struct SystemKeyboard {
     wanted: bool,
+    /// The window has the keyboard, as iOS reports it. A hardware keyboard keeps the on-screen
+    /// one away meanwhile.
     shown: bool,
     /// The focused field at the last step: a change decides `wanted` again.
     field: Option<Field>,
@@ -71,32 +104,50 @@ impl SystemKeyboard {
             self.shown
         })
     }
-    /// A tap left `field` with the focus: the keyboard is wanted while it keeps it.
-    fn request(&mut self, field: Option<Field>) {
+    /// A tap left `field` with the focus: the keyboard is wanted while it keeps it, and asked
+    /// for even if the window has it, since a hardware keyboard may have put it away.
+    fn request(&mut self, field: Option<Field>) -> Option<bool> {
         self.field = field;
         self.wanted = field.is_some();
+        if !self.wanted {
+            return self.step(field);
+        }
+        self.shown = true;
+        Some(true)
     }
-    /// Enter was typed into `field`.
-    fn entered(&mut self, field: Field) {
-        if field.enter_ends() {
+    /// What the system keyboard sent, with `field` focused: the edit it makes there.
+    fn input(&mut self, field: Option<Field>, input: SystemInput) -> Option<(Field, Edit)> {
+        let text = match input {
+            SystemInput::Typed(text) => text?,
+            SystemInput::Shown(shown) => {
+                // Put away by the player, it stays away until the next tap.
+                if !shown {
+                    self.wanted = false;
+                }
+                self.shown = shown;
+                return None;
+            }
+        };
+        let field = field?;
+        let edit = match text {
+            "\n" | "\r" => Edit::Enter,
+            text => Edit::Text(text.to_owned()),
+        };
+        if edit == Edit::Enter && field.enter_ends() {
             self.wanted = false;
         }
-    }
-    fn apply(&mut self, field: Option<Field>, window: Option<&Window>) {
-        if let Some(show) = self.step(field)
-            && cfg!(target_os = "ios")
-            && let Some(window) = window
-        {
-            window.set_ime_allowed(show);
-        }
+        Some((field, edit))
     }
 }
 
-/// The edit a piece of the system keyboard's text makes: Return comes as a new line.
-fn system_edit(text: &str) -> Edit {
-    match text {
-        "\n" | "\r" => Edit::Enter,
-        text => Edit::Text(text.to_owned()),
+/// Shows or hides the system keyboard. Only iOS has one: elsewhere `SystemKeyboard` says what iOS
+/// would show.
+fn show_keyboard(window: Option<&Window>, show: Option<bool>) {
+    if let Some(show) = show
+        && cfg!(target_os = "ios")
+        && let Some(window) = window
+    {
+        window.set_ime_allowed(show);
     }
 }
 
@@ -204,28 +255,21 @@ impl Game<'_> {
 
     /// Once a frame: the system keyboard follows the focused field.
     pub(super) fn system_keyboard_frame(&mut self) {
-        let field = self.typing_field();
-        self.keyboard.apply(field, self.window.as_deref());
+        let show = self.keyboard.step(self.typing_field());
+        show_keyboard(self.window.as_deref(), show);
     }
 
-    /// A tap gave a text field the focus: the system keyboard comes up for it.
+    /// A tap on the focused field: the system keyboard comes up for it.
     pub(super) fn request_keyboard(&mut self) {
-        let field = self.typing_field();
-        self.keyboard.request(field);
-        self.system_keyboard_frame();
+        let show = self.keyboard.request(self.typing_field());
+        show_keyboard(self.window.as_deref(), show);
     }
 
-    /// Text from the system keyboard (`insertText:`), before any screen's key handler. Enter in
-    /// a one-line field ends the typing, and the keyboard goes.
-    pub(super) fn system_keyboard_text(&mut self, text: &str) {
-        let Some(field) = self.typing_field() else {
-            return;
-        };
-        let edit = system_edit(text);
-        if edit == Edit::Enter {
-            self.keyboard.entered(field);
+    /// The system keyboard's input, before any screen's handler.
+    pub(super) fn system_keyboard_input(&mut self, input: SystemInput) {
+        if let Some((field, edit)) = self.keyboard.input(self.typing_field(), input) {
+            self.edit_field(field, edit);
         }
-        self.type_into_field(edit);
     }
 
     /// `horizon-ctl keyboard`: on other platforms than iOS, `shown` is what iOS would show.
@@ -241,66 +285,30 @@ impl Game<'_> {
 impl Loading {
     /// Once a frame: the system keyboard follows the startup menu's focused field.
     pub(super) fn system_keyboard_frame(&mut self) {
-        let field = self.typing_field();
-        self.keyboard.apply(field, self.window.as_deref());
+        let show = self.keyboard.step(self.typing_field());
+        show_keyboard(self.window.as_deref(), show);
     }
 
-    /// A tap gave a title or options field the focus: the system keyboard comes up for it.
+    /// A tap on a title or options field: the system keyboard comes up for it.
     #[expect(
         dead_code,
         reason = "the touch layer calls it once its field taps are wired"
     )]
     pub(super) fn request_keyboard(&mut self) {
-        let field = self.typing_field();
-        self.keyboard.request(field);
-        self.system_keyboard_frame();
+        let show = self.keyboard.request(self.typing_field());
+        show_keyboard(self.window.as_deref(), show);
     }
 
-    pub(super) fn system_keyboard_text(&mut self, text: &str) {
-        let Some(field) = self.typing_field() else {
-            return;
-        };
-        let edit = system_edit(text);
-        if edit == Edit::Enter {
-            self.keyboard.entered(field);
+    pub(super) fn system_keyboard_input(&mut self, input: SystemInput) {
+        if let Some((field, edit)) = self.keyboard.input(self.typing_field(), input) {
+            self.edit_field(field, edit);
         }
-        self.type_into_field(edit);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn return_from_the_system_keyboard_is_enter_and_the_rest_is_text() {
-        assert_eq!(system_edit("\n"), Edit::Enter);
-        assert_eq!(system_edit("\r"), Edit::Enter);
-        assert_eq!(system_edit("/"), Edit::Text("/".into()));
-        assert_eq!(system_edit("é"), Edit::Text("é".into()));
-        assert_eq!(system_edit("a\nb"), Edit::Text("a\nb".into()));
-    }
-
-    #[test]
-    fn only_typing_screens_open_the_keyboard_and_only_signs_and_books_keep_it_on_enter() {
-        use Field::*;
-        let all = [
-            Chat,
-            Sign,
-            Book,
-            CommandBlock,
-            CreativeSearch,
-            RecipeSearch,
-            Anvil,
-            WorldOptions,
-            Options,
-            Title,
-        ];
-        let opening: Vec<Field> = all.into_iter().filter(|f| f.opens_keyboard()).collect();
-        assert_eq!(opening, [Chat, Sign, Book, CommandBlock]);
-        let keeping: Vec<Field> = all.into_iter().filter(|f| !f.enter_ends()).collect();
-        assert_eq!(keeping, [Sign, Book]);
-    }
 
     #[test]
     fn a_typing_screen_shows_the_keyboard_once_and_its_closing_hides_it() {
@@ -310,14 +318,22 @@ mod tests {
         assert_eq!(keyboard.step(Some(Field::Chat)), None);
         assert_eq!(keyboard.step(None), Some(false));
         assert_eq!(keyboard.step(None), None);
+        // The window reports what it was asked: nothing changes.
+        assert_eq!(keyboard.input(None, SystemInput::Shown(false)), None);
+        assert_eq!(keyboard.step(None), None);
+        assert_eq!(keyboard.step(Some(Field::Chat)), Some(true));
+        assert_eq!(
+            keyboard.input(Some(Field::Chat), SystemInput::Shown(true)),
+            None
+        );
+        assert_eq!(keyboard.step(Some(Field::Chat)), None);
     }
 
     #[test]
     fn a_field_focused_without_a_tap_waits_for_one() {
         let mut keyboard = SystemKeyboard::default();
         assert_eq!(keyboard.step(Some(Field::CreativeSearch)), None);
-        keyboard.request(Some(Field::CreativeSearch));
-        assert_eq!(keyboard.step(Some(Field::CreativeSearch)), Some(true));
+        assert_eq!(keyboard.request(Some(Field::CreativeSearch)), Some(true));
         assert_eq!(keyboard.step(Some(Field::CreativeSearch)), None);
         // Another tab: the search box loses the focus.
         assert_eq!(keyboard.step(None), Some(false));
@@ -327,30 +343,73 @@ mod tests {
     #[test]
     fn a_tap_with_no_field_focused_asks_for_nothing() {
         let mut keyboard = SystemKeyboard::default();
-        keyboard.request(None);
+        assert_eq!(keyboard.request(None), None);
         assert_eq!(keyboard.step(None), None);
     }
 
     #[test]
-    fn enter_hides_the_keyboard_of_a_one_line_field_but_not_of_a_sign() {
+    fn a_keyboard_the_player_put_away_stays_away_until_a_tap_brings_it_back() {
         let mut keyboard = SystemKeyboard::default();
-        keyboard.request(Some(Field::Anvil));
-        assert_eq!(keyboard.step(Some(Field::Anvil)), Some(true));
-        keyboard.entered(Field::Anvil);
+        assert_eq!(keyboard.step(Some(Field::Chat)), Some(true));
+        // The iPad's hide key: the window gives the keyboard up.
+        assert_eq!(
+            keyboard.input(Some(Field::Chat), SystemInput::Shown(false)),
+            None
+        );
+        assert_eq!(keyboard.step(Some(Field::Chat)), None);
+        assert_eq!(keyboard.request(Some(Field::Chat)), Some(true));
+        assert_eq!(
+            keyboard.input(Some(Field::Chat), SystemInput::Shown(true)),
+            None
+        );
+        assert_eq!(keyboard.step(Some(Field::Chat)), None);
+        // A hardware keyboard put it away without the window giving it up: a tap asks again.
+        assert_eq!(keyboard.request(Some(Field::Chat)), Some(true));
+        assert_eq!(keyboard.step(Some(Field::Chat)), None);
+    }
+
+    #[test]
+    fn return_ends_the_typing_in_a_one_line_field_but_starts_a_line_on_a_sign() {
+        let mut keyboard = SystemKeyboard::default();
+        let typed = |keyboard: &mut SystemKeyboard, field, text| {
+            keyboard.input(Some(field), SystemInput::Typed(Some(text)))
+        };
+        assert_eq!(keyboard.request(Some(Field::Anvil)), Some(true));
+        assert_eq!(
+            typed(&mut keyboard, Field::Anvil, "é"),
+            Some((Field::Anvil, Edit::Text("é".into())))
+        );
+        assert_eq!(keyboard.step(Some(Field::Anvil)), None);
+        assert_eq!(
+            typed(&mut keyboard, Field::Anvil, "\n"),
+            Some((Field::Anvil, Edit::Enter))
+        );
         assert_eq!(keyboard.step(Some(Field::Anvil)), Some(false));
         // The name keeps the focus: the keyboard stays away until the next tap.
         assert_eq!(keyboard.step(Some(Field::Anvil)), None);
 
         assert_eq!(keyboard.step(Some(Field::Sign)), Some(true));
-        keyboard.entered(Field::Sign);
+        assert_eq!(
+            typed(&mut keyboard, Field::Sign, "\r"),
+            Some((Field::Sign, Edit::Enter))
+        );
         assert_eq!(keyboard.step(Some(Field::Sign)), None);
+    }
+
+    #[test]
+    fn the_system_keyboard_edits_nothing_without_a_field_or_on_a_release() {
+        let mut keyboard = SystemKeyboard::default();
+        assert_eq!(keyboard.input(None, SystemInput::Typed(Some("a"))), None);
+        assert_eq!(
+            keyboard.input(Some(Field::Chat), SystemInput::Typed(None)),
+            None
+        );
     }
 
     #[test]
     fn moving_between_fields_decides_again() {
         let mut keyboard = SystemKeyboard::default();
-        keyboard.request(Some(Field::Title));
-        assert_eq!(keyboard.step(Some(Field::Title)), Some(true));
+        assert_eq!(keyboard.request(Some(Field::Title)), Some(true));
         // The world opens from the title, and its chat opens.
         assert_eq!(keyboard.step(None), Some(false));
         assert_eq!(keyboard.step(Some(Field::Chat)), Some(true));

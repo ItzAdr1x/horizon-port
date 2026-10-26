@@ -10784,18 +10784,9 @@ impl ApplicationHandler for Game<'_> {
             }
             return;
         }
-        // The system keyboard's text (`insertText:`) is a key no keyboard has, which the screens'
-        // key handlers drop: it goes to the focused field before them.
-        if cfg!(target_os = "ios")
-            && let WindowEvent::KeyboardInput { event, .. } = &event
-            && let PhysicalKey::Unidentified(_) = event.physical_key
-        {
-            if event.state == ElementState::Pressed
-                && let Some(text) = &event.text
-            {
-                self.last_input = Instant::now();
-                self.system_keyboard_text(text);
-            }
+        if let Some(input) = typing::system_input(&event) {
+            self.last_input = Instant::now();
+            self.system_keyboard_input(input);
             return;
         }
         if let WindowEvent::KeyboardInput { event, .. } = &event
@@ -13006,21 +12997,13 @@ impl Loading {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
             return;
         }
+        if let Some(input) = typing::system_input(&event) {
+            self.system_keyboard_input(input);
+            return;
+        }
         let result = match event {
             WindowEvent::Touch(touch) if cfg!(target_os = "ios") => {
                 self.touch_event(event_loop, touch)
-            }
-            // The system keyboard's text, as in Game::window_event.
-            WindowEvent::KeyboardInput { event, .. }
-                if cfg!(target_os = "ios")
-                    && matches!(event.physical_key, PhysicalKey::Unidentified(_)) =>
-            {
-                if event.state == ElementState::Pressed
-                    && let Some(text) = &event.text
-                {
-                    self.system_keyboard_text(text);
-                }
-                Ok(())
             }
             event => self.menu_event(event_loop, event),
         };
