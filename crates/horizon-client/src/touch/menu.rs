@@ -487,19 +487,23 @@ impl Touch {
     }
 
     /// Let go of what a menu finger holds without acting: a cancelled touch, or a scene that
-    /// changed under it. Nothing hovers when the button comes up, and its release clicks nothing.
+    /// changed under it. Its button comes up where the finger was, clicking nothing, so a slider
+    /// keeps what the drag gave it; then nothing hovers.
     pub(super) fn let_go(&mut self, gesture: Gesture, out: &mut Vec<Input>) {
-        if let Gesture::Shift = gesture {
-            self.menus.shift.lift();
-            return;
+        match gesture {
+            Gesture::Shift => {
+                self.menus.shift.lift();
+                return;
+            }
+            Gesture::Pressing { press, shifted, .. } => {
+                out.push(Input::Abort(press.button()));
+                if shifted {
+                    out.push(Input::Shift(false));
+                }
+            }
+            _ => {}
         }
         out.push(Input::Pointer(AWAY));
-        if let Gesture::Pressing { press, shifted, .. } = gesture {
-            out.push(Input::Abort(press.button()));
-            if shifted {
-                out.push(Input::Shift(false));
-            }
-        }
     }
 
     /// The physical pixels tooltips keep clear above the pointer: a fingertip while a finger is

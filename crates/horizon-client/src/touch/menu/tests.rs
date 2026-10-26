@@ -156,7 +156,23 @@ fn a_cancel_mid_drag_lets_go_with_nothing_hovered() {
     touch.on(&layout, event(1, Phase::Move, B, Here::default()), now);
     assert_eq!(
         touch.on(&layout, event(1, Phase::Cancel, B, Here::default()), now),
-        [Input::Pointer(AWAY), Input::Abort(LEFT)]
+        [Input::Abort(LEFT), Input::Pointer(AWAY)]
+    );
+}
+
+#[test]
+fn a_cancelled_slider_drag_comes_up_before_the_pointer_leaves() {
+    let (mut touch, layout, now) = menu();
+    let slider = listed(spot(Spot::Slider));
+    let sideways = [A[0] + 60.0, A[1]];
+    touch.on(&layout, event(1, Phase::Start, A, slider), now);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Move, sideways, slider), now),
+        [Input::Pointer(A), press(true), Input::Pointer(sideways)]
+    );
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::Cancel, sideways, slider), now),
+        [Input::Abort(LEFT), Input::Pointer(AWAY)]
     );
 }
 
@@ -171,7 +187,7 @@ fn leaving_a_menu_mid_drag_lets_go_too() {
     };
     assert_eq!(
         touch.frame(playing, now),
-        [Input::Pointer(AWAY), Input::Abort(LEFT)]
+        [Input::Abort(LEFT), Input::Pointer(AWAY)]
     );
     assert!(
         touch
@@ -506,7 +522,7 @@ fn a_scene_change_mid_carry_lets_the_button_go_and_puts_nothing_down() {
     let next = next_scene(&touch);
     assert_eq!(
         touch.frame(next, now),
-        [Input::Pointer(AWAY), Input::Abort(LEFT)]
+        [Input::Abort(LEFT), Input::Pointer(AWAY)]
     );
     assert!(
         touch
@@ -704,7 +720,7 @@ fn a_cancel_during_one_per_slot_lets_the_right_button_go() {
     touch.on(&layout, event(1, Phase::Move, B, carrying(empty(4))), now);
     assert_eq!(
         touch.on(&layout, event(1, Phase::Cancel, B, carrying(empty(4))), now),
-        [Input::Pointer(AWAY), Input::Abort(RIGHT)]
+        [Input::Abort(RIGHT), Input::Pointer(AWAY)]
     );
 }
 
@@ -879,9 +895,9 @@ fn a_cancelled_shifted_drag_lets_shift_go_too() {
     assert_eq!(
         touch.on(&layout, event(1, Phase::Cancel, B, carrying(empty(4))), now),
         [
-            Input::Pointer(AWAY),
             Input::Abort(LEFT),
-            Input::Shift(false)
+            Input::Shift(false),
+            Input::Pointer(AWAY)
         ]
     );
 }
