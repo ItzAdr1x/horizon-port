@@ -8,8 +8,8 @@ use horizon_client::{
     hud::HudBatch,
     keymapping::{SNEAK, SPRINT},
     touch::{
-        self as fingers, Context, Here, Input, Layout, Mode, Phase, SlotKind, SlotSpot, Spot,
-        TouchEvent,
+        self as fingers, Context, Here, Input, Layout, Mode, Phase, PlaceResult, SlotKind,
+        SlotSpot, Spot, TouchEvent,
     },
     widgets::{self, Kind},
 };
@@ -264,6 +264,18 @@ impl Game<'_> {
         let mut changed = false;
         for input in inputs {
             let input = match input {
+                // Answered at once, also when it can't be placed: then the finger paints no
+                // more.
+                Input::PlaceOne(place) => {
+                    let result = if busy || changed {
+                        PlaceResult::Ended
+                    } else {
+                        self.inventory_place_one(event_loop, id, device_id, place.at)
+                    };
+                    self.touch.placed(place.finger, result);
+                    changed |= self.scene() != before;
+                    continue;
+                }
                 Input::Release(button) if changed => Input::Abort(button),
                 Input::Press { .. } | Input::PutDown(_) | Input::Wheel(_) if changed => continue,
                 input => input,
@@ -318,6 +330,8 @@ impl Game<'_> {
                     self.inventory_put_down(event_loop, id, device_id, at);
                     Ok(())
                 }
+                // Answered before the filters above.
+                Input::PlaceOne(_) => Ok(()),
                 Input::Shift(down) => {
                     self.touch_shift(down);
                     Ok(())
@@ -481,6 +495,7 @@ impl Loading {
                 }
                 Input::Wheel(lines) => self.menu_wheel(lines),
                 Input::Keyboard => self.request_keyboard(),
+                Input::PlaceOne(place) => self.touch.placed(place.finger, PlaceResult::Ended),
                 // Nothing of a world or an inventory is on the title screen.
                 Input::Shift(_)
                 | Input::PutDown(_)

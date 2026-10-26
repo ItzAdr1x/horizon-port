@@ -6528,6 +6528,78 @@ impl Game<'_> {
             self.window_event(event_loop, id, event);
         }
     }
+    /// A painting finger's one item into the slot at `at` (physical pixels): the mouse's right
+    /// click there, sent only when the menu engine's own click, run first on a copy, moves
+    /// exactly one item from the hand into that slot, and then read back. On every path the
+    /// click changes the hand at once: the server's copy is predicted (`remote_menu_ops`).
+    pub(super) fn inventory_place_one(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        id: WindowId,
+        device_id: DeviceId,
+        at: [f64; 2],
+    ) -> horizon_client::touch::PlaceResult {
+        use horizon_client::touch::PlaceResult;
+        let (Some(batch), Some(carried)) = (self.gui_scale(), self.carried.clone()) else {
+            return PlaceResult::Ended;
+        };
+        if !self.inventory_open() {
+            return PlaceResult::Ended;
+        }
+        let Some(slot) = self.slot_at(
+            &batch,
+            at[0] as f32 / batch.scale,
+            at[1] as f32 / batch.scale,
+        ) else {
+            return PlaceResult::Blocked;
+        };
+        // Only vanilla's plain right click: not shifted, not inside a drag of the mouse's,
+        // not one Mouse Tweaks takes over.
+        let mut takes = false;
+        if !self.has_shift_down()
+            && self.inv.drag.is_none()
+            && self.inv.clicks.quick_crafting().is_none()
+            && !self.tweaks_on()
+        {
+            self.menu_session(|menu, env, to_menu| {
+                takes = to_menu(slot).is_some_and(|s| menu.would_place_one(env, s));
+                Some(false)
+            });
+        }
+        if !takes {
+            return PlaceResult::Blocked;
+        }
+        let was = self.slot_view(slot);
+        self.inv.last_click = None;
+        let position = winit::dpi::PhysicalPosition::new(at[0], at[1]);
+        let button = |state| WindowEvent::MouseInput {
+            device_id,
+            state,
+            button: MouseButton::Right,
+        };
+        for event in [
+            WindowEvent::CursorMoved {
+                device_id,
+                position,
+            },
+            button(ElementState::Pressed),
+            button(ElementState::Released),
+        ] {
+            self.window_event(event_loop, id, event);
+        }
+        let now = self.slot_view(slot);
+        let moved = horizon_client::menu::moved_one(
+            &carried,
+            self.carried.as_ref(),
+            was.as_ref(),
+            now.as_ref(),
+        );
+        if moved && self.carried.is_some() {
+            PlaceResult::Placed
+        } else {
+            PlaceResult::Ended
+        }
+    }
     /// A press on an inventory taken back (a cancelled touch, or the scene changed under it):
     /// what it began is forgotten, and its release clicks nothing, as on a new screen.
     pub(super) fn inventory_abort(&mut self) {

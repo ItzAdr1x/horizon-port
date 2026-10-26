@@ -404,6 +404,28 @@ pub fn book_pages(stack: &ItemStack) -> usize {
     })
 }
 
+/// Exactly one item went from the hand (`carried`, now `left`) into a slot (`was`, now `now`),
+/// the same item with the same components on both sides.
+pub fn moved_one(
+    carried: &ItemStack,
+    left: Option<&ItemStack>,
+    was: Option<&ItemStack>,
+    now: Option<&ItemStack>,
+) -> bool {
+    let one_less = match left {
+        None => carried.count == 1,
+        Some(left) => left.count + 1 == carried.count && left.same_item_same_components(carried),
+    };
+    let grown = |was: u32| {
+        now.is_some_and(|now| now.same_item_same_components(carried) && now.count == was + 1)
+    };
+    let one_more = match was {
+        None => grown(0),
+        Some(was) => was.same_item_same_components(carried) && grown(was.count),
+    };
+    one_less && one_more
+}
+
 fn tidy(slot: &mut Option<ItemStack>) {
     if slot.as_ref().is_some_and(|s| s.count == 0) {
         *slot = None;
@@ -2822,25 +2844,10 @@ impl Menu {
         if after.click(env, s as i32, 1, Input::Pickup).is_err() {
             return false;
         }
-        let one_less = match &after.carried {
-            None => carried.count == 1,
-            Some(left) => {
-                left.count + 1 == carried.count && left.same_item_same_components(carried)
-            }
-        };
-        let grown = |was: u32| {
-            after
-                .slot(s)
-                .is_some_and(|now| now.same_item_same_components(carried) && now.count == was + 1)
-        };
-        let one_more = match self.slot(s) {
-            None => grown(0),
-            Some(was) => was.same_item_same_components(carried) && grown(was.count),
-        };
         let rest = (0..self.slots.len())
             .filter(|&i| i != s && !self.slots[i].role.output())
             .all(|i| after.slot(i) == self.slot(i));
-        one_less && one_more && rest
+        rest && moved_one(carried, after.carried.as_ref(), self.slot(s), after.slot(s))
     }
 
     /// What a quick craft drag of type `ty` over `slots` shows
