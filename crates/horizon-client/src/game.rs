@@ -1147,6 +1147,29 @@ fn select_creative_tab(
     clicks.skip_release();
 }
 
+/// What can cover a world's screen and take the mouse from it.
+#[derive(Clone, Copy, Default, Hash)]
+struct Covers {
+    /// The title screen, with no world behind it.
+    title: bool,
+    /// A server's resource pack prompt (`PackConfirmScreen`).
+    pack_prompt: bool,
+    book: bool,
+    sign: bool,
+}
+
+/// An inventory on `screen` takes the mouse: nothing covers it.
+fn inventory_takes_mouse(screen: Screen, covers: Covers) -> bool {
+    let Covers {
+        title,
+        pack_prompt,
+        book,
+        sign,
+    } = covers;
+    matches!(screen, Screen::Inventory | Screen::Creative)
+        && !(title || pack_prompt || book || sign)
+}
+
 /// What an inventory screen keeps between clicks, as vanilla keeps it on its `Screen` object:
 /// another scene (`Game::scene`) starts afresh.
 struct ScreenClicks {
@@ -5556,18 +5579,25 @@ impl Game<'_> {
                 .map(|m| m.0),
             self.mount_active(),
         );
-        let overlays = (
-            self.sign_edit.is_some(),
-            self.book.is_some(),
-            self.server_packs.prompt.is_some(),
-        );
         scene_id((
             self.screen,
             self.title.as_ref().map(title_page),
             options,
             menu,
-            overlays,
+            self.covers(),
         ))
+    }
+    fn covers(&self) -> Covers {
+        Covers {
+            title: self.title.is_some(),
+            pack_prompt: self.server_packs.prompt.is_some(),
+            book: self.book.is_some(),
+            sign: self.sign_edit.is_some(),
+        }
+    }
+    /// An inventory is shown and takes the mouse.
+    pub(super) fn inventory_open(&self) -> bool {
+        inventory_takes_mouse(self.screen, self.covers())
     }
     pub(super) fn close_container(&mut self) {
         self.close_station();
@@ -6585,6 +6615,21 @@ impl Game<'_> {
                 }
             }
             _ => self.inv.drag = None,
+        }
+    }
+    /// The pick block action (`keyPickItem`) pressed or released on an inventory with nothing
+    /// over it, by its mouse button or a touch's long press on a creative item.
+    pub(super) fn inventory_pick(&mut self, down: bool) {
+        if !self.inventory_open() {
+            return;
+        }
+        if down {
+            self.inventory_pick_press();
+        } else {
+            self.inventory_pick_release();
+        }
+        if let Some(key) = self.container {
+            self.container_changed(key);
         }
     }
     /// A press of the pick block button (`keyPickItem`, the middle button by
@@ -11354,14 +11399,7 @@ impl ApplicationHandler for Game<'_> {
                             if self.settings.keys.get("key.pickItem")
                                 == horizon_client::keybinds::mouse_name(button)
                             {
-                                if pressed {
-                                    self.inventory_pick_press();
-                                } else {
-                                    self.inventory_pick_release();
-                                }
-                                if let Some(key) = self.container {
-                                    self.container_changed(key);
-                                }
+                                self.inventory_pick(pressed);
                             }
                         }
                         Screen::Inventory if pressed => {
@@ -13785,6 +13823,34 @@ mod tests {
             release(&mut inv, &slot),
             Release::Click(horizon_client::menu::Input::Pickup)
         );
+    }
+
+    #[test]
+    fn an_inventory_takes_the_mouse_only_with_nothing_over_it() {
+        let clear = Covers::default();
+        assert!(inventory_takes_mouse(Screen::Inventory, clear));
+        assert!(inventory_takes_mouse(Screen::Creative, clear));
+        assert!(!inventory_takes_mouse(Screen::Playing, clear));
+        for covers in [
+            Covers {
+                title: true,
+                ..clear
+            },
+            Covers {
+                pack_prompt: true,
+                ..clear
+            },
+            Covers {
+                book: true,
+                ..clear
+            },
+            Covers {
+                sign: true,
+                ..clear
+            },
+        ] {
+            assert!(!inventory_takes_mouse(Screen::Creative, covers));
+        }
     }
 
     #[test]

@@ -147,7 +147,7 @@ impl Game<'_> {
         };
         let p = (at[0] as f32 / batch.scale, at[1] as f32 / batch.scale);
         let mut here = widget_here(p, batch.scale);
-        if self.title.is_none() && matches!(self.screen, Screen::Inventory | Screen::Creative) {
+        if self.inventory_open() {
             if let Some(spot) = self.inventory_spot(&batch, p) {
                 here.spot = spot;
             }
@@ -225,8 +225,7 @@ impl Game<'_> {
             movement: self.settings.controller.touch_movement,
             flying: self.player.as_ref().is_some_and(|p| p.flying),
             held_item_used_over_time: self.held_item_used_over_time(),
-            slots: self.title.is_none()
-                && matches!(self.screen, Screen::Inventory | Screen::Creative),
+            slots: self.inventory_open(),
         }
     }
 
@@ -301,12 +300,12 @@ impl Game<'_> {
                     button: fingers::MouseButton::Middle,
                     ..
                 } => {
-                    self.touch_pick(true);
+                    self.inventory_pick(true);
                     Ok(())
                 }
                 Input::Release(fingers::MouseButton::Middle)
                 | Input::Abort(fingers::MouseButton::Middle) => {
-                    self.touch_pick(false);
+                    self.inventory_pick(false);
                     Ok(())
                 }
                 Input::Pointer(_) | Input::Press { .. } | Input::Release(_) | Input::Abort(_) => {
@@ -353,22 +352,6 @@ impl Game<'_> {
                 log::warn!("Horizon: touch: {e}");
             }
             changed |= clicks && self.scene() != before;
-        }
-    }
-
-    /// The pick block action on an inventory, as its key's press or release would be (a long
-    /// press on a creative item takes a full stack), whatever the key is bound to.
-    fn touch_pick(&mut self, down: bool) {
-        if !matches!(self.screen, Screen::Inventory | Screen::Creative) {
-            return;
-        }
-        if down {
-            self.inventory_pick_press();
-        } else {
-            self.inventory_pick_release();
-        }
-        if let Some(key) = self.container {
-            self.container_changed(key);
         }
     }
 
