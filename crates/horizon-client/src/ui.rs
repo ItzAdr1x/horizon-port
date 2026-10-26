@@ -609,11 +609,16 @@ pub fn set_tooltip_lift(gui_px: f32) {
     TOOLTIP_LIFT.set(gui_px);
 }
 
-/// The top of a tooltip `h` pixels tall for a pointer at height `y`: 12 pixels above the pointer
-/// (`DefaultTooltipPositioner`), or wholly above a finger that is the pointer.
-pub fn tooltip_top(y: f32, h: f32) -> f32 {
+/// The top of a tooltip's text for a pointer at height `y`, its drawn box reaching `below` pixels
+/// under that top: 12 pixels above the pointer (`DefaultTooltipPositioner`), or with the whole box
+/// above a finger that is the pointer.
+pub fn tooltip_top(y: f32, below: f32) -> f32 {
     let lift = TOOLTIP_LIFT.get();
-    if lift > 0.0 { y - lift - h } else { y - 12.0 }
+    if lift > 0.0 {
+        y - lift - below
+    } else {
+        y - 12.0
+    }
 }
 
 /// Screen tooltip (DefaultTooltipPositioner + TooltipRenderUtil): the
@@ -632,7 +637,8 @@ pub fn tooltip(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], cursor: (
         10.0 * lines.len() as f32
     };
     let mut x = cursor.0 + 12.0;
-    let mut y = tooltip_top(cursor.1, h);
+    // The background sprite's box ends 4 pixels below the text.
+    let mut y = tooltip_top(cursor.1, h + 4.0);
     if x + w > batch.width {
         x = (cursor.0 - 24.0 - w).max(4.0);
     }
@@ -1216,9 +1222,10 @@ mod tests {
 
     #[test]
     fn tooltips_rise_wholly_above_a_finger() {
+        // A box reaching 30 pixels below its text's top.
         assert_eq!(tooltip_top(100.0, 30.0), 88.0);
         set_tooltip_lift(20.0);
-        assert_eq!(tooltip_top(100.0, 30.0), 50.0);
+        assert_eq!(tooltip_top(100.0, 30.0) + 30.0, 100.0 - 20.0);
         set_tooltip_lift(0.0);
         assert_eq!(tooltip_top(100.0, 30.0), 88.0);
     }
