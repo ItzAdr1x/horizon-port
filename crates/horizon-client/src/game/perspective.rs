@@ -114,6 +114,14 @@ impl CameraType {
     pub(super) fn first_person(self) -> bool {
         self == CameraType::FirstPerson
     }
+    /// Its name in vanilla's enum, lower case.
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            CameraType::FirstPerson => "first_person",
+            CameraType::ThirdPersonBack => "third_person_back",
+            CameraType::ThirdPersonFront => "third_person_front",
+        }
+    }
     fn cycle(self) -> Self {
         match self {
             CameraType::FirstPerson => CameraType::ThirdPersonBack,

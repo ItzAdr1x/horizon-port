@@ -449,6 +449,26 @@ impl Game<'_> {
         pressed
     }
 
+    /// The key caps, or the Fn panel's tiles while it is open, for `ui`: in GUI pixels.
+    pub(super) fn touch_functions_value(&self) -> Value {
+        let (Some(layout), Some(batch)) = (self.touch_layout(), self.gui_scale()) else {
+            return json!([]);
+        };
+        let shown: Vec<Value> = self
+            .touch
+            .functions(&layout)
+            .iter()
+            .map(|s| {
+                json!({
+                    "keys": s.keys,
+                    "label": s.does,
+                    "bounds": s.rect.map(|v| v / batch.scale),
+                })
+            })
+            .collect();
+        json!(shown)
+    }
+
     pub(super) fn draw_touch(&self, batch: &mut HudBatch) {
         // An F2 screenshot is of the game, not of the controls over it.
         if self.ui.screenshot_message.is_some() {

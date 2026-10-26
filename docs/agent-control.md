@@ -248,6 +248,9 @@ turn the switch off.
   `fov`, `AI Agent...` is `ai-agent`). A repeated slug gets `-2`, `-3`; unlabelled elements are
   `<kind>-<n>`. A slider's id doesn't change with its value. Slots are `slot-<ID>` with their
   stack.
+- **Touch key caps:** `touch` lists, in play, the touch controls' key caps, or the Fn panel's
+  tiles while it is open: `keys` (`F5`, `F3+B`), `label` and `bounds` in GUI pixels, which
+  `touch start|end ID X Y` takes. `click` doesn't reach them.
 - **Kinds:** `button`, `slider` (`value` 0..1), `field`, `row` (a world, server, pack or
   language), `tab` (`selected`), `slot`.
 - **Actions:**
