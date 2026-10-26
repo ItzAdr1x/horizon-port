@@ -1,6 +1,8 @@
 //! The touch controls in Pocket Edition's look: translucent squares with pixel-art icons, one art
-//! pixel `Layout::unit` physical pixels wide, drawn into the HUD batch.
+//! pixel `Layout::unit` physical pixels wide, drawn into the HUD batch. Key caps and the Fn
+//! panel's tiles are written in the game's font instead.
 
+use super::functions::Control;
 use super::layout::{Button, Cell, KNOB, Layout, Rect};
 use super::menu::{Gesture, Hold, Latch, MENU_HOLD, hold};
 use super::{HOLD, Mode, Movement, Role, Touch};
@@ -123,6 +125,11 @@ enum Turn {
 const OUTLINE: u32 = 0x9600_0000;
 const PLATE: u32 = 0x6e00_0000;
 const ICON: u32 = 0xdcff_ffff;
+/// Over play while the Fn panel is open.
+const SHADE: u32 = 0x8000_0000;
+/// The game font's capitals, in GUI pixels: seven rows, and a line nine apart.
+const CAPITALS: f32 = 7.0;
+const LINE: f32 = 9.0;
 
 fn pressed_plate() -> u32 {
     rgba(255, 255, 255, 120)
@@ -177,6 +184,15 @@ impl Pen<'_> {
     fn button(&mut self, r: Rect, pressed: bool, icon: Icon, turn: Turn) {
         self.plate(r, pressed);
         self.icon(r, icon, turn);
+    }
+    /// `text` in the game's font, with its shadow, centred across `r` with its capitals' top at
+    /// `top`, on whole GUI pixels.
+    fn text(&mut self, text: &str, r: Rect, top: f32, color: u32) {
+        let g = self.layout.gui;
+        let width = HudBatch::text_width(self.atlas, text);
+        let x = ((r[0] + r[2] / 2.0) / g - width / 2.0).round();
+        self.batch
+            .text(self.atlas, text, x, (top / g).round(), color, true);
     }
     /// A ring of dots around a finger at `at`, filling as it is held `held` of `hold`.
     fn ring(&mut self, at: [f64; 2], held: Duration, hold: Duration) {
@@ -242,6 +258,7 @@ impl Touch {
                 }
                 self.draw_menu(&mut pen, now);
             }
+            Mode::Playing if self.panel => self.draw_panel(&mut pen),
             Mode::Playing => {
                 match self.context.movement {
                     Movement::DPad => self.draw_dpad(&mut pen, sneaking),
@@ -272,6 +289,7 @@ impl Touch {
                     CHAT,
                     Turn::Up,
                 );
+                self.draw_caps(&mut pen);
                 self.draw_holds(&mut pen, now);
             }
         }
@@ -363,6 +381,39 @@ impl Touch {
             {
                 pen.ring(last, now.duration_since(landed), HOLD);
             }
+        }
+    }
+
+    fn on_control(&self, control: &Control) -> bool {
+        self.fingers
+            .iter()
+            .any(|f| matches!(f.role, Role::Function(c) if c.place == control.place))
+    }
+
+    /// Play's key caps, with their keys on them.
+    fn draw_caps(&self, pen: &mut Pen<'_>) {
+        let g = pen.layout.gui;
+        for control in self.live_controls() {
+            let r = pen.layout.control(control.place);
+            pen.plate(r, self.on_control(control));
+            let top = r[1] + (r[3] - CAPITALS * g) / 2.0;
+            pen.text(control.keys, r, top, u32::MAX);
+        }
+    }
+
+    /// The Fn panel over play, which it shades: Back, and a tile for each key with what it does.
+    fn draw_panel(&self, pen: &mut Pen<'_>) {
+        let layout = pen.layout;
+        let g = layout.gui;
+        pen.fill(layout.screen(), SHADE);
+        pen.button(layout.button(Button::Back), false, ARROW, Turn::Left);
+        pen.plate(layout.panel(), false);
+        for control in self.live_controls() {
+            let r = layout.control(control.place);
+            pen.plate(r, self.on_control(control));
+            let top = r[1] + (r[3] - (LINE + CAPITALS) * g) / 2.0;
+            pen.text(control.keys, r, top, rgba(255, 255, 85, 255));
+            pen.text(control.does, r, top + LINE * g, u32::MAX);
         }
     }
 }

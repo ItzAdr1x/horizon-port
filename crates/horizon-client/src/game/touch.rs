@@ -5,11 +5,12 @@ use super::{Game, Loading, Screen};
 use horizon_client::{
     Result,
     creative::Creative,
+    debug_keys::DebugAction,
     hud::HudBatch,
     keymapping::{SNEAK, SPRINT},
     touch::{
-        self as fingers, Context, Here, Input, Layout, Mode, Phase, SlotKind, SlotSpot, Spot,
-        TouchEvent,
+        self as fingers, Context, Function, Here, Input, Layout, Mode, Phase, SlotKind, SlotSpot,
+        Spot, TouchEvent,
     },
     widgets::{self, Kind},
 };
@@ -226,6 +227,7 @@ impl Game<'_> {
             flying: self.player.as_ref().is_some_and(|p| p.flying),
             held_item_used_over_time: self.held_item_used_over_time(),
             slots: self.inventory_open(),
+            hud_visible: !self.ui.hide_gui,
         }
     }
 
@@ -265,7 +267,11 @@ impl Game<'_> {
         for input in inputs {
             let input = match input {
                 Input::Release(button) if changed => Input::Abort(button),
-                Input::Press { .. } | Input::PutDown(_) | Input::Wheel(_) if changed => continue,
+                Input::Press { .. } | Input::PutDown(_) | Input::Wheel(_) | Input::Function(_)
+                    if changed =>
+                {
+                    continue;
+                }
                 input => input,
             };
             let clicks = matches!(
@@ -275,6 +281,7 @@ impl Game<'_> {
                     | Input::Abort(_)
                     | Input::PutDown(_)
                     | Input::Wheel(_)
+                    | Input::Function(_)
             );
             let lets_go = matches!(
                 input,
@@ -306,6 +313,13 @@ impl Game<'_> {
                 Input::Release(fingers::MouseButton::Middle)
                 | Input::Abort(fingers::MouseButton::Middle) => {
                     self.inventory_pick(false);
+                    Ok(())
+                }
+                // The game mode switcher answers no mouse click; a finger picks a mode there.
+                Input::Release(fingers::MouseButton::Left)
+                    if self.screen == Screen::GameModeSwitcher =>
+                {
+                    self.touch_choose_mode();
                     Ok(())
                 }
                 Input::Pointer(_) | Input::Press { .. } | Input::Release(_) | Input::Abort(_) => {
@@ -350,6 +364,7 @@ impl Game<'_> {
                     Ok(())
                 }
                 Input::Back => self.pad_back(),
+                Input::Function(function) => self.touch_function(function),
             };
             if let Err(e) = result {
                 log::warn!("Horizon: touch: {e}");
@@ -410,7 +425,35 @@ impl Game<'_> {
         self.mapping_action(mapping, false)
     }
 
+    /// A key cap or a tile of the Fn panel: its keys pressed and released whole, F1, F2 and F5
+    /// as their key mappings, F3 and its combinations as the debug keys.
+    fn touch_function(&mut self, function: Function) -> Result<()> {
+        let combination = match function {
+            Function::Perspective => return self.tap_mapping("key.togglePerspective"),
+            Function::HideHud => return self.tap_mapping("key.toggleGui"),
+            Function::Screenshot => return self.tap_mapping("key.screenshot"),
+            Function::DebugScreen => None,
+            Function::Hitboxes => Some(DebugAction::ShowHitboxes),
+            Function::ChunkBorders => Some(DebugAction::ShowChunkBorders),
+            Function::AdvancedTooltips => Some(DebugAction::AdvancedTooltips),
+            Function::GameModes => Some(DebugAction::SwitchGameMode),
+        };
+        self.touch_debug(combination);
+        Ok(())
+    }
+
+    /// A key mapping pressed and released, the release sent even if the press failed.
+    fn tap_mapping(&mut self, mapping: &str) -> Result<()> {
+        let pressed = self.mapping_action(mapping, true);
+        self.mapping_action(mapping, false)?;
+        pressed
+    }
+
     pub(super) fn draw_touch(&self, batch: &mut HudBatch) {
+        // An F2 screenshot is of the game, not of the controls over it.
+        if self.ui.screenshot_message.is_some() {
+            return;
+        }
         if let Some(layout) = self.touch_layout() {
             let sneaking = self.toggles.is_down(SNEAK);
             self.touch
@@ -490,7 +533,8 @@ impl Loading {
                 | Input::Sneak
                 | Input::Tap
                 | Input::Hotbar(_)
-                | Input::Back => {}
+                | Input::Back
+                | Input::Function(_) => {}
             }
         }
         Ok(())
