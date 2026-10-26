@@ -703,7 +703,7 @@ impl Game<'_> {
                 let y = overlay.y + 5.0 + 25.0 * (n / maxrow) as f32;
                 if !right && inside(cursor, x, y, 24.0, 24.0) {
                     let shift = self.shift_down();
-                    self.try_place(*entry, shift);
+                    self.place_from_book(book_type, *entry, shift);
                     return true;
                 }
             }
@@ -744,7 +744,7 @@ impl Game<'_> {
                 let step = self.swap_index();
                 let (entry, _) = button.entries[step % button.entries.len()];
                 let shift = self.shift_down();
-                self.try_place(entry, shift);
+                self.place_from_book(book_type, entry, shift);
             }
             return true;
         }
@@ -915,10 +915,19 @@ impl Game<'_> {
 
     // ---- placing a recipe ----
 
-    /// `RecipeBookComponent.tryPlaceRecipe`.
-    fn try_place(&mut self, entry_index: usize, use_max: bool) {
+    /// A recipe chosen on a page or among its alternatives (`RecipeBookComponent.mouseClicked`):
+    /// once placed, a book covering the menu hides to show the grid (`!isOffsetNextToMainGUI()`).
+    fn place_from_book(&mut self, book: BookType, entry_index: usize, use_max: bool) {
+        let covers = self.recipe_book_covers();
+        if self.try_place(entry_index, use_max) && covers {
+            self.set_book_open(book, false);
+        }
+    }
+    /// `RecipeBookComponent.tryPlaceRecipe`: whether the placement was asked for (false for the
+    /// same uncraftable recipe again), whatever the menu then does with it.
+    fn try_place(&mut self, entry_index: usize, use_max: bool) -> bool {
         let Some(book_type) = self.active_book() else {
-            return;
+            return false;
         };
         let Some(id) = self
             .recipe_ui
@@ -927,7 +936,7 @@ impl Game<'_> {
             .and_then(|b| b.entries.get(entry_index))
             .map(|e| e.id.clone())
         else {
-            return;
+            return false;
         };
         let button_craftable = self
             .recipe_ui
@@ -937,11 +946,12 @@ impl Game<'_> {
             .flat_map(|b| b.entries.iter())
             .any(|e| e.0 == entry_index && e.1);
         if !button_craftable && self.recipe_ui.last_placed.as_deref() == Some(id.as_str()) {
-            return;
+            return false;
         }
         self.recipe_ui.last_placed = Some(id);
         self.recipe_ui.ghost.clear();
         self.place_recipe(book_type, entry_index, use_max);
+        true
     }
     /// `ServerboundPlaceRecipePacket`: the server places the recipe
     /// (`ServerPlaceRecipe` on the menu engine) and answers with a ghost

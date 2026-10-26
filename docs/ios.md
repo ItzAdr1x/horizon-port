@@ -133,6 +133,7 @@ once a finger first touches the screen.
 | Shift (bottom left, in inventories) | The keyboard's Shift, as on the iPhone keyboard. Tap it to shift the next tap, double tap it to lock it (underlined), tap again to unlock, or hold it while you tap. Shift and a tap moves a stack across (into a chest and back), and on the crafting result crafts all it can. Creative's trash empties the inventory only while a finger holds Shift |
 | Tooltips | Rest a finger on a stack or a button: its tooltip shows above the finger, out from under it |
 | Back (top left, in a world's menus) | Escape: closes the inventory and other screens, resumes from pause |
+| Recipe book (the green book) | Where the screen is too narrow for the book beside the inventory, as the unfolded iPhone Duo's is, the open book covers it, as in Java Edition: Back hides only the book, and choosing a recipe hides it to show the grid |
 | D-pad (bottom left) | Forward, back and the sides; the forward diagonals show while forward is held, and a thumb slides between arrows. A double tap on forward sprints. The middle toggles sneaking, and goes down while flying |
 | Jump (bottom right) | Jumps; a double tap flies in creative, and holding it goes up while flying |
 | Anywhere else | Drag to turn the view. Tap to attack the mob under the crosshair, or else use the held item (place a block, open a door or chest). Hold still: a ring fills, then the finger mines until it lifts, or eats, drinks, draws a bow or blocks when the held item is used over time |
