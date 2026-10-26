@@ -122,6 +122,11 @@ pub enum Input {
     /// The mouse button goes up, and its release must click nothing: the touch was cancelled, or
     /// the screen changed under it.
     Abort(MouseButton),
+    /// If the hand holds a stack now, a left click here (physical pixels): a dropped stack's
+    /// swap or remainder goes back where the stack came from.
+    PutBack([f64; 2]),
+    /// A tap focused a text field: the system keyboard is wanted.
+    Keyboard,
     /// Mouse movement turning the view.
     Look([f64; 2]),
     /// A vanilla key mapping pressed or released.
@@ -198,6 +203,7 @@ pub struct Touch {
     keys: Keys,
     /// A finger has touched the screen: the controls are drawn from then on.
     seen: bool,
+    menus: menu::Menus,
 }
 
 impl Touch {
@@ -258,7 +264,7 @@ impl Touch {
             (Phase::End, Some(i)) => {
                 let finger = self.fingers.remove(i);
                 match finger.role {
-                    Role::Menu(gesture) => self.lift_menu(gesture, at, &mut out),
+                    Role::Menu(gesture) => self.lift_menu(gesture, at, here, &mut out),
                     role => self.lift(role, now, &mut out),
                 }
             }

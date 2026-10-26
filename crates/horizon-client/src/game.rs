@@ -4711,7 +4711,8 @@ impl Game<'_> {
             }
             stack.count = left;
         }
-        self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+        let (x, y) = self.carried_anchor();
+        self.draw_item(batch, &stack, x - 8.0, y - 8.0);
     }
     /// The quick craft drag in progress, as the menu engine previews it.
     fn drag_view(&mut self) -> Option<DragView> {
@@ -6041,6 +6042,12 @@ impl Game<'_> {
         }
         true
     }
+    /// An item tab's display slot shows an item at the scroll position.
+    fn creative_display_filled(&self, slot: usize) -> bool {
+        let first = self.creative_screen.first_row(&self.pack.names);
+        let shown = self.creative_screen.items(&self.pack.names).len();
+        first * 9 + slot - Creative::DISPLAY < shown
+    }
     /// `CreativeModeInventoryScreen.keyPressed` on the search tab: a hotbar
     /// key over a slot swaps before the search box sees it.
     fn search_tab_hotbar_key(&mut self, code: KeyCode) -> bool {
@@ -6060,13 +6067,9 @@ impl Game<'_> {
         let batch = HudBatch::new(size);
         let hover = match self.slot_at(&batch, self.cursor.0, self.cursor.1) {
             None => Hover::Nothing,
-            Some(slot) if slot >= Creative::DISPLAY => {
-                let first = self.creative_screen.first_row(&self.pack.names);
-                let shown = self.creative_screen.items(&self.pack.names).len();
-                Hover::Display {
-                    filled: first * 9 + slot - Creative::DISPLAY < shown,
-                }
-            }
+            Some(slot) if slot >= Creative::DISPLAY => Hover::Display {
+                filled: self.creative_display_filled(slot),
+            },
             Some(_) => Hover::Slot,
         };
         search_key_swaps(numeric, hotbar_key, hover, self.carried.is_some())
@@ -6283,6 +6286,10 @@ impl Game<'_> {
     }
     /// `hasClickedOutside` of the open screen at the cursor.
     fn clicked_outside(&self, batch: &HudBatch) -> bool {
+        self.clicked_outside_at(batch, self.cursor)
+    }
+    /// `hasClickedOutside` of the open screen at `(x, y)`, GUI pixels.
+    fn clicked_outside_at(&self, batch: &HudBatch, (x, y): (f32, f32)) -> bool {
         use horizon_client::container_screen::{Book, Image, clicked_outside};
         let (ox, oy) = self.inventory_origin(batch);
         let (shift, width, height) = if self.screen == Screen::Creative {
@@ -6307,12 +6314,7 @@ impl Game<'_> {
                 visible,
                 selected_tab_hovered: tab_hovered,
             });
-        clicked_outside(
-            f64::from(self.cursor.0),
-            f64::from(self.cursor.1),
-            image,
-            book,
-        )
+        clicked_outside(f64::from(x), f64::from(y), image, book)
     }
     /// A click outside the window (slot id -999): `THROW` does nothing; a
     /// `PICKUP` drops the carried stack (left) or one of it (right), thrown
@@ -12925,6 +12927,8 @@ struct Loading {
     shown: bool,
     menu: startup_menu::StartupMenu,
     touch: horizon_client::touch::Touch,
+    /// Frames drawn: the widgets a finger lands on are the last one's (`widgets::end_frame`).
+    frames: u64,
     error: Option<Box<dyn std::error::Error>>,
 }
 impl Loading {
@@ -13065,6 +13069,8 @@ impl Loading {
         };
         let mut batch = HudBatch::new(size);
         self.draw_menu(&mut batch);
+        self.frames += 1;
+        horizon_client::widgets::end_frame(self.frames);
         let mut frame = loading_frame(&batch);
         frame.yaw = self.panorama_rotation.update(
             self.started.elapsed().as_secs_f32(),
@@ -13269,6 +13275,7 @@ fn run_loading(
         shown: false,
         menu,
         touch: Default::default(),
+        frames: 0,
         error: None,
     };
     let mut app = App::Loading(Box::new(loading));

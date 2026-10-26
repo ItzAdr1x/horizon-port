@@ -2,6 +2,7 @@
 //! pixel `Layout::unit` physical pixels wide, drawn into the HUD batch.
 
 use super::layout::{Button, Cell, KNOB, Layout, Rect};
+use super::menu::Gesture;
 use super::{HOLD, Mode, Movement, Role, Touch};
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use std::time::Instant;
@@ -51,6 +52,19 @@ const SNEAK: Icon = &[
     "##########",
 ];
 const DOTS: Icon = &["##..##..##", "##..##..##"];
+/// An arrow down to the ground: lifting here throws the stack.
+const DROP: Icon = &[
+    "...####...",
+    "...####...",
+    "...####...",
+    "##########",
+    ".########.",
+    "..######..",
+    "...####...",
+    "....##....",
+    "..........",
+    "##########",
+];
 const PAUSE: Icon = &["##..##", "##..##", "##..##", "##..##", "##..##", "##..##"];
 
 /// Which way an icon points: as drawn, or turned.
@@ -157,7 +171,10 @@ impl Touch {
         };
         match self.context.mode {
             Mode::Title => {}
-            Mode::Menu => pen.button(layout.button(Button::Back), false, ARROW, Turn::Left),
+            Mode::Menu => {
+                pen.button(layout.button(Button::Back), false, ARROW, Turn::Left);
+                self.draw_menu(&mut pen);
+            }
             Mode::Playing => {
                 match self.context.movement {
                     Movement::DPad => self.draw_dpad(&mut pen, sneaking),
@@ -234,6 +251,19 @@ impl Touch {
             pressed_plate()
         };
         pen.disc(knob, KNOB / 2.0 - 1.0, lit);
+    }
+
+    /// The menu fingers' marks: the drop hint above a finger that would throw a stack.
+    fn draw_menu(&self, pen: &mut Pen<'_>) {
+        for finger in &self.fingers {
+            if let Role::Menu(Gesture::Pressing {
+                outside: Some(at), ..
+            }) = finger.role
+            {
+                let hint = pen.layout.above([at[0] as f32, at[1] as f32]);
+                pen.button(hint, false, DROP, Turn::Up);
+            }
+        }
     }
 
     /// A ring of dots filling around each finger held still on the view, until it mines or uses.

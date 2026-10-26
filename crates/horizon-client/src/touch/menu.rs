@@ -69,7 +69,33 @@ pub(super) enum Gesture {
     /// Down and hovering where it landed; nothing is pressed until the gesture is known.
     Pending { from: [f64; 2], here: Here },
     /// A mouse button is down: pressed where the finger landed, the pointer following it.
-    Pressing { button: MouseButton },
+    Pressing {
+        press: Press,
+        /// Beyond the panel at this point, where lifting throws what is carried: the hint.
+        outside: Option<[f64; 2]>,
+    },
+}
+
+/// What a menu finger's button is down for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Press {
+    /// The mouse's own drag: a slider, a scrollbar, a button pressed and slid off.
+    Plain,
+    /// A stack picked up with an empty hand from `origin`, where the finger landed at `from`:
+    /// it is put down where the finger lifts.
+    Carry { origin: SlotSpot, from: [f64; 2] },
+    /// The carried stack, spread evenly over the slots the finger crosses (QUICK_CRAFT 0).
+    Spread,
+}
+
+impl Press {
+    fn button(self) -> MouseButton {
+        MouseButton::Left
+    }
+    /// Lifting it beyond the panel throws a stack.
+    fn throws(self) -> bool {
+        !matches!(self, Press::Plain)
+    }
 }
 
 /// The finger has left where it landed: its slot, for a slot outside a list (a tap may wander
@@ -78,6 +104,20 @@ pub(super) fn left(landed: &Here, from: [f64; 2], here: &Here, at: [f64; 2], slo
     match (landed.spot, landed.list) {
         (Spot::Slot(s), None) => !matches!(here.spot, Spot::Slot(t) if t.id == s.id),
         _ => ((at[0] - from[0]) as f32).hypot((at[1] - from[1]) as f32) > slop,
+    }
+}
+
+/// What a finger that left where it landed at `from` presses for.
+pub(super) fn drag(landed: &Here, from: [f64; 2]) -> Press {
+    match landed.spot {
+        _ if landed.carrying => Press::Spread,
+        // A creative item's copy has nowhere to go back to.
+        Spot::Slot(origin)
+            if origin.filled && matches!(origin.kind, SlotKind::Normal | SlotKind::Result) =>
+        {
+            Press::Carry { origin, from }
+        }
+        _ => Press::Plain,
     }
 }
 
@@ -118,32 +158,74 @@ impl Touch {
         here: Here,
         out: &mut Vec<Input>,
     ) {
-        match *gesture {
-            Gesture::Pending { from, here: landed } => {
-                if left(&landed, from, &here, at, layout.slop()) {
-                    out.push(Input::Pointer(from));
-                    out.push(Input::Press {
-                        button: MouseButton::Left,
-                        fresh: true,
-                    });
-                    *gesture = Gesture::Pressing {
-                        button: MouseButton::Left,
-                    };
-                }
+        if let Gesture::Pending { from, here: landed } = *gesture {
+            if !left(&landed, from, &here, at, layout.slop()) {
                 out.push(Input::Pointer(at));
+                return;
             }
-            Gesture::Pressing { .. } => out.push(Input::Pointer(at)),
+            let press = drag(&landed, from);
+            out.push(Input::Pointer(from));
+            out.push(Input::Press {
+                button: press.button(),
+                fresh: true,
+            });
+            *gesture = Gesture::Pressing {
+                press,
+                outside: None,
+            };
         }
+        if let Gesture::Pressing { press, outside } = gesture {
+            *outside = (press.throws() && here.spot == Spot::Outside).then_some(at);
+        }
+        out.push(Input::Pointer(at));
     }
 
-    /// A menu finger lifts at `at`.
-    pub(super) fn lift_menu(&mut self, gesture: Gesture, at: [f64; 2], out: &mut Vec<Input>) {
+    /// A menu finger lifts at `at`, over `here`.
+    pub(super) fn lift_menu(
+        &mut self,
+        gesture: Gesture,
+        at: [f64; 2],
+        here: Here,
+        out: &mut Vec<Input>,
+    ) {
+        self.menus.rest = Some(at);
         out.push(Input::Pointer(at));
         match gesture {
+            // Fingers miss on a big screen, and a stack thrown into the world can't be taken
+            // back: throwing is a drag beyond the panel, never a tap.
+            Gesture::Pending { here: landed, .. }
+                if landed.carrying && landed.spot == Spot::Outside => {}
             // Two taps on one slot reach the game as two clicks at their own lifts, so its double
             // click (PICKUP_ALL) is the game's to decide, on its own clock.
-            Gesture::Pending { .. } => click(out, MouseButton::Left, false),
-            Gesture::Pressing { button } => out.push(Input::Release(button)),
+            Gesture::Pending { here: landed, .. } => {
+                click(out, MouseButton::Left, false);
+                if landed.spot == Spot::Field {
+                    out.push(Input::Keyboard);
+                }
+            }
+            Gesture::Pressing {
+                press: Press::Carry { origin, from },
+                ..
+            } => {
+                out.push(Input::Release(MouseButton::Left));
+                // The drop, and whatever it leaves in hand put back where the stack came from
+                // (a stack it was swapped with, a remainder). A crafted stack goes back nowhere:
+                // a click on the result would craft again.
+                let back = origin.kind == SlotKind::Normal;
+                match here.spot {
+                    Spot::Slot(b) if b.id == origin.id => {}
+                    Spot::Outside => click(out, MouseButton::Left, true),
+                    Spot::Slot(_) => {
+                        click(out, MouseButton::Left, true);
+                        if back {
+                            out.push(Input::PutBack(from));
+                        }
+                    }
+                    _ if back => out.push(Input::PutBack(from)),
+                    _ => {}
+                }
+            }
+            Gesture::Pressing { press, .. } => out.push(Input::Release(press.button())),
         }
         out.push(Input::Pointer(AWAY));
     }
@@ -152,10 +234,33 @@ impl Touch {
     /// changed under it. Nothing hovers when the button comes up, and its release clicks nothing.
     pub(super) fn let_go(&mut self, gesture: Gesture, out: &mut Vec<Input>) {
         out.push(Input::Pointer(AWAY));
-        if let Gesture::Pressing { button } = gesture {
-            out.push(Input::Abort(button));
+        if let Gesture::Pressing { press, .. } = gesture {
+            out.push(Input::Abort(press.button()));
         }
     }
+
+    /// The game's screen changed under the menu fingers while it took their clicks: they do
+    /// nothing more until they lift, and their buttons' releases never reach the new screen.
+    pub fn spend(&mut self) -> Vec<Input> {
+        for finger in &mut self.fingers {
+            if let Role::Menu(_) = finger.role {
+                finger.role = Role::Spent;
+            }
+        }
+        vec![Input::Pointer(AWAY)]
+    }
+
+    /// Where a carried stack is drawn while nothing hovers: where the last finger lifted.
+    pub fn rest(&self) -> Option<[f64; 2]> {
+        self.menus.rest
+    }
+}
+
+/// What menus keep between fingers.
+#[derive(Debug, Default)]
+pub(super) struct Menus {
+    /// Where the last menu finger lifted.
+    rest: Option<[f64; 2]>,
 }
 
 #[cfg(test)]
@@ -186,15 +291,51 @@ mod tests {
         }
     }
 
-    fn slot(id: u32) -> Here {
+    fn slot_of(id: u32, filled: bool, kind: SlotKind) -> Here {
         Here {
-            spot: Spot::Slot(SlotSpot {
-                id,
-                filled: true,
-                kind: SlotKind::Normal,
-            }),
+            spot: Spot::Slot(SlotSpot { id, filled, kind }),
             ..Here::default()
         }
+    }
+
+    /// A stack, under an empty hand.
+    fn slot(id: u32) -> Here {
+        slot_of(id, true, SlotKind::Normal)
+    }
+
+    fn empty(id: u32) -> Here {
+        slot_of(id, false, SlotKind::Normal)
+    }
+
+    fn carrying(here: Here) -> Here {
+        Here {
+            carrying: true,
+            ..here
+        }
+    }
+
+    fn spot(spot: Spot) -> Here {
+        Here {
+            spot,
+            ..Here::default()
+        }
+    }
+
+    const fn press(fresh: bool) -> Input {
+        Input::Press {
+            button: LEFT,
+            fresh,
+        }
+    }
+
+    /// The inputs of a finger that lands at `A` over `landed`, moves to `B` over `over` and
+    /// lifts there.
+    fn drag_and_lift(landed: Here, over: Here) -> (Vec<Input>, Vec<Input>) {
+        let (mut touch, layout, now) = menu();
+        touch.touch(&layout, event(1, Phase::Start, A, landed), now);
+        let moved = touch.touch(&layout, event(1, Phase::Move, B, over), now);
+        let lifted = touch.touch(&layout, event(1, Phase::End, B, over), now);
+        (moved, lifted)
     }
 
     const A: [f64; 2] = [1000.0, 800.0];
@@ -332,5 +473,249 @@ mod tests {
         };
         assert!(!left(&listed, A, &listed, near, slop));
         assert!(left(&listed, A, &listed, far, slop));
+    }
+
+    #[test]
+    fn a_stack_dragged_with_an_empty_hand_drops_where_it_lifts() {
+        let (moved, lifted) = drag_and_lift(slot(3), empty(4));
+        assert_eq!(moved, [Input::Pointer(A), press(true), Input::Pointer(B)]);
+        assert_eq!(
+            lifted,
+            [
+                Input::Pointer(B),
+                Input::Release(LEFT),
+                press(true),
+                Input::Release(LEFT),
+                Input::PutBack(A),
+                Input::Pointer(AWAY)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stack_dropped_on_a_gap_goes_back_where_it_came_from() {
+        let (_, lifted) = drag_and_lift(slot(3), Here::default());
+        assert_eq!(
+            lifted,
+            [
+                Input::Pointer(B),
+                Input::Release(LEFT),
+                Input::PutBack(A),
+                Input::Pointer(AWAY)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stack_dragged_back_onto_its_slot_stays_in_hand() {
+        let (mut touch, layout, now) = menu();
+        touch.touch(&layout, event(1, Phase::Start, A, slot(3)), now);
+        touch.touch(&layout, event(1, Phase::Move, B, empty(4)), now);
+        touch.touch(&layout, event(1, Phase::Move, A, slot(3)), now);
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::End, A, slot(3)), now),
+            [
+                Input::Pointer(A),
+                Input::Release(LEFT),
+                Input::Pointer(AWAY)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_stack_dragged_beyond_the_panel_is_thrown_and_hinted() {
+        let (mut touch, layout, now) = menu();
+        touch.touch(&layout, event(1, Phase::Start, A, slot(3)), now);
+        touch.touch(&layout, event(1, Phase::Move, B, spot(Spot::Outside)), now);
+        assert!(matches!(
+            touch.fingers[0].role,
+            Role::Menu(Gesture::Pressing {
+                outside: Some(B),
+                ..
+            })
+        ));
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::End, B, spot(Spot::Outside)), now),
+            [
+                Input::Pointer(B),
+                Input::Release(LEFT),
+                press(true),
+                Input::Release(LEFT),
+                Input::Pointer(AWAY)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_crafted_stack_dropped_on_another_is_never_put_back() {
+        let result = slot_of(200, true, SlotKind::Result);
+        let (_, lifted) = drag_and_lift(result, slot(4));
+        assert!(!lifted.iter().any(|i| matches!(i, Input::PutBack(_))));
+        assert_eq!(lifted.iter().filter(|i| **i == press(true)).count(), 1);
+    }
+
+    #[test]
+    fn a_creative_copy_is_dragged_as_the_mouse_drags_it() {
+        let copy = slot_of(901, true, SlotKind::Display);
+        let (_, lifted) = drag_and_lift(copy, empty(4));
+        assert_eq!(
+            lifted,
+            [
+                Input::Pointer(B),
+                Input::Release(LEFT),
+                Input::Pointer(AWAY)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_carried_stack_dragged_across_slots_presses_on_the_first_as_it_leaves() {
+        let (mut touch, layout, now) = menu();
+        touch.touch(&layout, event(1, Phase::Start, A, carrying(empty(3))), now);
+        let inside = [A[0] + 10.0, A[1]];
+        assert_eq!(
+            touch.touch(
+                &layout,
+                event(1, Phase::Move, inside, carrying(empty(3))),
+                now
+            ),
+            [Input::Pointer(inside)]
+        );
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::Move, B, carrying(empty(4))), now),
+            [Input::Pointer(A), press(true), Input::Pointer(B)]
+        );
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::End, B, carrying(empty(4))), now),
+            [
+                Input::Pointer(B),
+                Input::Release(LEFT),
+                Input::Pointer(AWAY)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tap_outside_with_a_stack_in_hand_throws_nothing() {
+        let (mut touch, layout, now) = menu();
+        let outside = carrying(spot(Spot::Outside));
+        touch.touch(&layout, event(1, Phase::Start, A, outside), now);
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::End, A, outside), now),
+            [Input::Pointer(A), Input::Pointer(AWAY)]
+        );
+        // With nothing in hand there is nothing to throw, and the click is the mouse's.
+        touch.touch(&layout, event(2, Phase::Start, A, spot(Spot::Outside)), now);
+        assert!(
+            touch
+                .touch(&layout, event(2, Phase::End, A, spot(Spot::Outside)), now)
+                .contains(&press(false))
+        );
+    }
+
+    #[test]
+    fn a_tap_on_a_field_asks_for_the_keyboard() {
+        let (mut touch, layout, now) = menu();
+        touch.touch(&layout, event(1, Phase::Start, A, spot(Spot::Field)), now);
+        assert_eq!(
+            touch.touch(&layout, event(1, Phase::End, A, spot(Spot::Field)), now),
+            [
+                Input::Pointer(A),
+                press(false),
+                Input::Release(LEFT),
+                Input::Keyboard,
+                Input::Pointer(AWAY)
+            ]
+        );
+    }
+
+    #[test]
+    fn two_taps_on_a_slot_are_two_clicks_at_their_lifts() {
+        let (mut touch, layout, now) = menu();
+        let tap = [
+            Input::Pointer(A),
+            press(false),
+            Input::Release(LEFT),
+            Input::Pointer(AWAY),
+        ];
+        for id in [1, 2] {
+            assert_eq!(
+                touch.touch(&layout, event(id, Phase::Start, A, slot(3)), now),
+                [Input::Pointer(A)]
+            );
+            assert_eq!(
+                touch.touch(&layout, event(id, Phase::End, A, slot(3)), now),
+                tap
+            );
+        }
+    }
+
+    #[test]
+    fn a_drag_right_after_a_tap_on_the_same_slot_is_no_double_click() {
+        let (mut touch, layout, now) = menu();
+        touch.touch(&layout, event(1, Phase::Start, A, slot(3)), now);
+        touch.touch(&layout, event(1, Phase::End, A, slot(3)), now);
+        // The tap picked the stack up; the next finger spreads it from the same slot.
+        touch.touch(&layout, event(2, Phase::Start, A, carrying(empty(3))), now);
+        let moved = touch.touch(&layout, event(2, Phase::Move, B, carrying(empty(4))), now);
+        assert!(moved.contains(&press(true)) && !moved.contains(&press(false)));
+    }
+
+    #[test]
+    fn a_screen_change_spends_the_fingers() {
+        let (mut touch, layout, now) = menu();
+        touch.touch(&layout, event(1, Phase::Start, A, Here::default()), now);
+        touch.touch(&layout, event(1, Phase::Move, B, Here::default()), now);
+        assert_eq!(touch.spend(), [Input::Pointer(AWAY)]);
+        assert!(
+            touch
+                .touch(&layout, event(1, Phase::Move, A, Here::default()), now)
+                .is_empty()
+        );
+        assert!(
+            touch
+                .touch(&layout, event(1, Phase::End, A, Here::default()), now)
+                .is_empty()
+        );
+        // The next finger is the pointer again.
+        assert_eq!(
+            touch.touch(&layout, event(2, Phase::Start, A, Here::default()), now),
+            [Input::Pointer(A)]
+        );
+    }
+
+    #[test]
+    fn the_last_lift_is_where_a_carried_stack_rests() {
+        let (mut touch, layout, now) = menu();
+        assert_eq!(touch.rest(), None);
+        touch.touch(&layout, event(1, Phase::Start, A, slot(3)), now);
+        touch.touch(&layout, event(1, Phase::End, B, slot(3)), now);
+        assert_eq!(touch.rest(), Some(B));
+    }
+
+    #[test]
+    fn drag_decides_from_where_it_landed() {
+        let origin = |here: Here| match here.spot {
+            Spot::Slot(origin) => origin,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            drag(&slot(3), A),
+            Press::Carry {
+                origin: origin(slot(3)),
+                from: A
+            }
+        );
+        let result = slot_of(200, true, SlotKind::Result);
+        assert!(matches!(drag(&result, A), Press::Carry { .. }));
+        assert_eq!(drag(&empty(3), A), Press::Plain);
+        assert_eq!(
+            drag(&slot_of(901, true, SlotKind::Display), A),
+            Press::Plain
+        );
+        assert_eq!(drag(&carrying(empty(3)), A), Press::Spread);
+        assert_eq!(drag(&carrying(slot(3)), A), Press::Spread);
+        assert_eq!(drag(&carrying(spot(Spot::Outside)), A), Press::Spread);
+        assert_eq!(drag(&Here::default(), A), Press::Plain);
     }
 }

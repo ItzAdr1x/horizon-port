@@ -695,6 +695,7 @@ mod tests {
             shown: false,
             menu: StartupMenu::default(),
             touch: Default::default(),
+            frames: 0,
             error: None,
         }
     }

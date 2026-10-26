@@ -15,6 +15,8 @@ const PITCH: f32 = 20.0;
 const JUMP: f32 = 22.0;
 const SMALL: f32 = 14.0;
 const MARGIN: f32 = 8.0;
+/// A fingertip's reach above the point it touches.
+const FINGER: f32 = 12.0;
 /// The joystick's reach, and its knob's size.
 pub(super) const REACH: f32 = 22.0;
 pub(super) const KNOB: f32 = 14.0;
@@ -209,6 +211,17 @@ impl Layout {
     /// How far a finger may drift and still tap or hold.
     pub(super) fn slop(&self) -> f32 {
         self.u(4.0)
+    }
+    /// How far above a finger things stay in sight: a fingertip, about 33 points.
+    pub(super) fn finger_clearance(&self) -> f32 {
+        self.u(FINGER)
+    }
+    /// A small button's square over a finger at `at`, clear of the fingertip, kept on screen.
+    pub(super) fn above(&self, at: [f32; 2]) -> Rect {
+        let side = self.u(SMALL);
+        let x = (at[0] - side / 2.0).clamp(0.0, self.size[0] - side);
+        let y = (at[1] - self.finger_clearance() - side).max(0.0);
+        [x, y, side, side]
     }
 }
 
