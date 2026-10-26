@@ -10785,7 +10785,9 @@ impl ApplicationHandler for Game<'_> {
             return;
         }
         if let Some(input) = typing::system_input(&event) {
-            self.last_input = Instant::now();
+            if matches!(input, typing::SystemInput::Typed(Some(_))) {
+                self.last_input = Instant::now();
+            }
             self.system_keyboard_input(input);
             return;
         }

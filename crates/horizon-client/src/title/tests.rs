@@ -884,7 +884,8 @@ fn a_typed_field_name_focuses_its_box_and_a_wrong_one_changes_nothing() {
     if let Mode::Edit { focused, .. } = &mut f.title.mode {
         *focused = false;
     }
-    assert!(f.title.focus_field("seed").is_err());
+    let error = f.title.focus_field("seed").unwrap_err().to_string();
+    assert!(error.contains("only the name"), "{error}");
     assert!(matches!(f.title.mode, Mode::Edit { focused: false, .. }));
     f.title.focus_field("name").unwrap();
     assert!(matches!(f.title.mode, Mode::Edit { focused: true, .. }));

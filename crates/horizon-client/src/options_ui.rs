@@ -3424,9 +3424,7 @@ mod tests {
 
     #[test]
     fn the_pack_screen_takes_typing_while_its_search_box_has_the_focus() {
-        let atlas =
-            crate::hud::HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets"))
-                .unwrap();
+        let atlas = atlas();
         let m = crate::screen_draw::Measure(&atlas.font);
         let mut ui = OptionsUi::default();
         ui.show(Page::Packs);
@@ -3435,13 +3433,10 @@ mod tests {
             ui.typing(),
             "the search box has the focus as the screen opens"
         );
-        let screen = ui.pack_screen.as_mut().unwrap();
-        let (x, y) = (0..480)
-            .flat_map(|x| (0..320).map(move |y| (f64::from(x), f64::from(y))))
-            .find(|&(x, y)| screen.button_at(&m, x, y))
-            .expect("a footer button");
-        screen.click(&m, x, y);
-        assert!(!ui.typing(), "a footer button took the focus");
+        // Done, the footer's second button: 150x20 at (480 - 308) / 2 + 158, 320 - 33 + 7.
+        let done = ui.pack_screen.as_mut().unwrap().click(&m, 319.0, 304.0);
+        assert_eq!(done, crate::pack_screen::Action::Done);
+        assert!(!ui.typing(), "Done took the focus");
     }
 
     #[test]

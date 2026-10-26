@@ -98,8 +98,8 @@ pub(super) fn system_input(event: &WindowEvent) -> Option<SystemInput<'_>> {
 #[derive(Debug, Default)]
 pub(super) struct SystemKeyboard {
     wanted: bool,
-    /// The window has the keyboard, as iOS reports it. A hardware keyboard keeps the on-screen
-    /// one away meanwhile.
+    /// What the window was last asked, corrected by what it reports (`Ime::Enabled`,
+    /// `Ime::Disabled`). A hardware keyboard keeps the on-screen one away meanwhile.
     shown: bool,
     /// The focused field at the last step: a change decides `wanted` again.
     field: Option<Field>,
@@ -118,8 +118,9 @@ impl SystemKeyboard {
             self.shown
         })
     }
-    /// A tap left `field` with the focus: the keyboard is wanted while it keeps it, and asked
-    /// for even if the window has it, since a hardware keyboard may have put it away.
+    /// A tap left `field` with the focus: the keyboard is wanted while it keeps it. It is asked
+    /// for even when `shown` says the window has it: had the window given it up without an
+    /// `Ime::Disabled` reaching the app, no tap would bring it back.
     fn request(&mut self, field: Option<Field>) -> Option<bool> {
         self.field = field;
         self.wanted = field.is_some();
@@ -421,9 +422,41 @@ mod tests {
             None
         );
         assert_eq!(keyboard.step(Some(Field::Chat)), None);
-        // A hardware keyboard put it away without the window giving it up: a tap asks again.
+    }
+
+    #[test]
+    fn a_tap_asks_for_the_keyboard_even_when_a_missed_disabled_left_it_shown() {
+        let mut keyboard = SystemKeyboard::default();
+        assert_eq!(keyboard.step(Some(Field::Chat)), Some(true));
+        // The window gives the keyboard up, but no Ime::Disabled reaches the app.
+        assert_eq!(keyboard.step(Some(Field::Chat)), None);
         assert_eq!(keyboard.request(Some(Field::Chat)), Some(true));
         assert_eq!(keyboard.step(Some(Field::Chat)), None);
+    }
+
+    #[test]
+    fn screens_made_for_typing_open_the_keyboard_and_only_signs_and_books_keep_it_on_enter() {
+        use Field::*;
+        // (field, opens the keyboard itself, keeps it on Enter)
+        let policies = [
+            (Chat, true, false),
+            (Sign, true, true),
+            (Book, true, true),
+            (CommandBlock, true, false),
+            (CreativeSearch, false, false),
+            (RecipeSearch, false, false),
+            (Anvil, false, false),
+            (WorldOptions, false, false),
+            (Options, false, false),
+            (Title, false, false),
+        ];
+        for (field, opens, keeps) in policies {
+            assert_eq!(
+                (field.opens_keyboard(), !field.enter_ends()),
+                (opens, keeps),
+                "{field:?}"
+            );
+        }
     }
 
     #[test]

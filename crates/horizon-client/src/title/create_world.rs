@@ -320,6 +320,11 @@ impl Title {
                 );
             }
             (Mode::Edit { focused, .. }, "name") => *focused = true,
+            (Mode::Edit { .. }, other) => {
+                return Err(
+                    format!("the edit-world screen has only the name field, not {other}").into(),
+                );
+            }
             _ => return Err("--field works on the create-world or edit-world screen".into()),
         }
         Ok(())
