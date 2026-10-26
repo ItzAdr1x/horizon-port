@@ -112,6 +112,15 @@ pub enum Release {
 }
 
 impl Clicks {
+    /// A new screen's (`AbstractContainerScreen`'s constructor): its first release clicks
+    /// nothing, so a button held across the change comes up on the new screen doing nothing.
+    pub fn new() -> Self {
+        Self {
+            quick_crafting: None,
+            skip_next_release: true,
+        }
+    }
+
     /// A quick craft drag in progress, and the button that started it.
     pub fn quick_crafting(&self) -> Option<Button> {
         self.quick_crafting

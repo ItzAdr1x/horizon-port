@@ -1149,7 +1149,6 @@ fn select_creative_tab(
 
 /// What an inventory screen keeps between clicks, as vanilla keeps it on its `Screen` object:
 /// another scene (`Game::scene`) starts afresh.
-#[derive(Default)]
 struct ScreenClicks {
     /// `AbstractContainerScreen`'s quick craft and skip-release state.
     clicks: horizon_client::container_screen::Clicks,
@@ -1157,17 +1156,27 @@ struct ScreenClicks {
     drag: Option<(i32, Vec<usize>)>,
     /// The last click, for the double click that gathers a stack.
     last_click: Option<(std::time::Instant, usize, bool)>,
+    /// `lastQuickMoved`: what the last Shift click moved, which a Shift double click moves every
+    /// stack of.
+    last_quick_moved: Option<ItemStack>,
     scene: u64,
 }
 
 impl ScreenClicks {
+    /// Those of a new screen, `scene`.
+    fn new(scene: u64) -> Self {
+        Self {
+            clicks: horizon_client::container_screen::Clicks::new(),
+            drag: None,
+            last_click: None,
+            last_quick_moved: None,
+            scene,
+        }
+    }
     /// The clicks of `scene`, the one shown now.
     fn follow(&mut self, scene: u64) {
         if scene != self.scene {
-            *self = Self {
-                scene,
-                ..Self::default()
-            };
+            *self = Self::new(scene);
         }
     }
 }
@@ -1303,9 +1312,6 @@ struct Game<'a> {
     /// While the touch controls hold Shift down: whether a keyboard already held it, in `keys`
     /// and in `physical_keys`, so it stays held when touch lets go.
     touch_shift: Option<(bool, bool)>,
-    /// `lastQuickMoved`: what the last Shift click moved, which a Shift
-    /// double click moves every stack of.
-    last_quick_moved: Option<ItemStack>,
     /// Open container block entity, if any.
     container: Option<(i32, i32, i32)>,
     /// Open workstation menu (enchanting table, anvil, ...).
@@ -6310,7 +6316,7 @@ impl Game<'_> {
             // of a carried stack, mouseReleased's in vanilla) remember the
             // stack it moves.
             if input == Some(Input::QuickMove) || (self.carried.is_some() && !double) {
-                self.last_quick_moved = self.slot_view(slot);
+                self.inv.last_quick_moved = self.slot_view(slot);
             }
             if double && !right {
                 // mouseReleased: every stack of lastQuickMoved's item in the
@@ -6322,7 +6328,7 @@ impl Game<'_> {
                     self.click_inventory(right);
                     return;
                 }
-                if let Some(moved) = self.last_quick_moved.clone() {
+                if let Some(moved) = self.inv.last_quick_moved.clone() {
                     if self.remote.is_some() {
                         self.remote_quick_move_all(slot, &moved);
                     } else {
@@ -6425,13 +6431,9 @@ impl Game<'_> {
         }
     }
     /// A press on an inventory taken back (a cancelled touch, or the scene changed under it):
-    /// what it began is forgotten, and its release clicks nothing.
+    /// what it began is forgotten, and its release clicks nothing, as on a new screen.
     pub(super) fn inventory_abort(&mut self) {
-        self.inv = ScreenClicks {
-            scene: self.scene(),
-            ..ScreenClicks::default()
-        };
-        self.inv.clicks.skip_release();
+        self.inv = ScreenClicks::new(self.scene());
     }
     /// Mouse movement while a quick craft drag is running.
     fn inventory_drag_move(&mut self) {
@@ -11929,10 +11931,9 @@ impl<'a> Game<'a> {
             carried: None,
             craft_grid: vec![None; 9],
             craft_size: 2,
-            inv: Default::default(),
+            inv: ScreenClicks::new(0),
             tweaks: Default::default(),
             touch_shift: None,
-            last_quick_moved: None,
             container: None,
             station: None,
             potions: Default::default(),
@@ -13752,8 +13753,7 @@ mod tests {
 
     #[test]
     fn another_scene_starts_the_inventory_clicks_afresh() {
-        let mut inv = ScreenClicks::default();
-        inv.follow(1);
+        let mut inv = ScreenClicks::new(1);
         // A press holding a stack starts a quick craft drag over slot 3.
         let slot = Target::Slot(3usize);
         assert_eq!(
@@ -13762,16 +13762,27 @@ mod tests {
         );
         inv.drag = Some((0, vec![3]));
         inv.last_click = Some((std::time::Instant::now(), 3, false));
+        inv.last_quick_moved = Some(ItemStack::new("minecraft:oak_log", 20));
         inv.follow(1);
         assert!(inv.clicks.quick_crafting().is_some());
-        assert!(inv.drag.is_some() && inv.last_click.is_some());
+        assert!(inv.drag.is_some() && inv.last_click.is_some() && inv.last_quick_moved.is_some());
         inv.follow(2);
         assert_eq!(inv.clicks.quick_crafting(), None);
-        assert!(inv.drag.is_none() && inv.last_click.is_none());
-        // The next screen's release with a stack in hand is a plain click, not the old drag.
-        assert_eq!(
+        assert!(inv.drag.is_none() && inv.last_click.is_none() && inv.last_quick_moved.is_none());
+        // The button held across the change comes up on the next screen clicking nothing, though
+        // a stack is in hand and the pointer is outside, where a click would throw it.
+        let release = |inv: &mut ScreenClicks, target| {
             inv.clicks
-                .release(&slot, Button::Left, false, false, false, false),
+                .release(target, Button::Left, false, false, false, false)
+        };
+        assert_eq!(release(&mut inv, &Target::Outside), Release::Nothing);
+        // The next screen's own press and release, still holding the stack, is a plain click.
+        assert_eq!(
+            inv.clicks.press(&slot, Button::Left, false, false, false),
+            None
+        );
+        assert_eq!(
+            release(&mut inv, &slot),
             Release::Click(horizon_client::menu::Input::Pickup)
         );
     }
