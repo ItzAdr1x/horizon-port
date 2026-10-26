@@ -340,6 +340,7 @@ impl Game<'_> {
             }
         }
         let (bx, by) = (w / 2.0 - 100.0, h / 4.0 + 144.0);
+        horizon_client::widgets::record("Done", [bx, by, 200.0, 20.0], true);
         batch.sprite_scaled(
             atlas,
             "gui/sprites/widget/button",

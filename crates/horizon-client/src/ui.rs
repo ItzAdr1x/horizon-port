@@ -815,8 +815,8 @@ impl Caret {
 /// `setInvertHighlightedTextColor`), and the cursor, blinking from when the
 /// field took the focus (`TextCursorUtils.isCursorVisible`): an underscore,
 /// or a bar once the value is `max_chars` long. `shadow` is `setTextShadow`.
-/// `field` is the box a click or a finger focuses, which a caller centring
-/// the text keeps still as the value grows.
+/// `field` is the box a finger or the gamepad's focus targets, which a caller
+/// centring the text keeps still as the value grows.
 #[allow(clippy::too_many_arguments)]
 pub fn append_field(
     batch: &mut HudBatch,
