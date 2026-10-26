@@ -246,6 +246,24 @@ use winit::{
     window::{CursorGrabMode, Window, WindowId},
 };
 
+/// A scene's identity (`Game::scene`): its parts, hashed.
+fn scene_id(parts: impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = std::hash::DefaultHasher::new();
+    parts.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The title screen's page, as scenes tell them apart.
+fn title_page(title: &Title) -> impl std::hash::Hash {
+    use horizon_client::title::Mode;
+    let server_page = match &title.mode {
+        Mode::Multiplayer(screen) => Some(std::mem::discriminant(screen)),
+        _ => None,
+    };
+    (std::mem::discriminant(&title.mode), server_page)
+}
+
 #[derive(Clone)]
 struct Options {
     resources: PathBuf,
@@ -463,7 +481,7 @@ impl Options {
         Ok(Some(o))
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Screen {
     Playing,
     GameModeSwitcher,
@@ -1130,6 +1148,163 @@ fn select_creative_tab(
     clicks.skip_release();
 }
 
+/// What the screen shows, as an identity's parts (`Game::scene`).
+#[derive(Clone, Copy, Hash)]
+struct Scene {
+    screen: Screen,
+    /// The title's page, and the sub-screen of a screen with its own, hashed.
+    view: u64,
+    /// The menu behind an inventory screen: its container block, its station, the server's
+    /// window id, a mount's.
+    container: Option<(i32, i32, i32)>,
+    station: Option<std::mem::Discriminant<stations::Kind>>,
+    window: Option<i32>,
+    mount: bool,
+    /// Screens opened so far (`Game::screens_opened`).
+    opened: u64,
+    covers: Covers,
+}
+
+/// What can cover a world's screen and take the mouse from it.
+#[derive(Clone, Copy, Default, Hash)]
+struct Covers {
+    /// The title screen, with no world behind it.
+    title: bool,
+    /// A server's resource pack prompt (`PackConfirmScreen`).
+    pack_prompt: bool,
+    book: bool,
+    sign: bool,
+}
+
+/// An inventory on `screen` takes the mouse: nothing covers it.
+fn inventory_takes_mouse(screen: Screen, covers: Covers) -> bool {
+    let Covers {
+        title,
+        pack_prompt,
+        book,
+        sign,
+    } = covers;
+    matches!(screen, Screen::Inventory | Screen::Creative)
+        && !(title || pack_prompt || book || sign)
+}
+
+/// What an inventory screen keeps between clicks, as vanilla keeps it on its `Screen` object:
+/// another scene (`Game::scene`) starts afresh.
+struct ScreenClicks {
+    /// `AbstractContainerScreen`'s quick craft and skip-release state.
+    clicks: horizon_client::container_screen::Clicks,
+    /// A quick craft drag over inventory slots: (button, game slots so far).
+    drag: Option<(i32, Vec<usize>)>,
+    /// The last click, for the double click that gathers a stack.
+    last_click: Option<(std::time::Instant, usize, bool)>,
+    /// `lastQuickMoved`: what the last Shift click moved, which a Shift double click moves every
+    /// stack of.
+    last_quick_moved: Option<ItemStack>,
+    scene: u64,
+}
+
+impl ScreenClicks {
+    /// Those of a new screen, `scene`.
+    fn new(scene: u64) -> Self {
+        Self {
+            clicks: horizon_client::container_screen::Clicks::new(),
+            drag: None,
+            last_click: None,
+            last_quick_moved: None,
+            scene,
+        }
+    }
+    /// The clicks of `scene`, the one shown now.
+    fn follow(&mut self, scene: u64) {
+        if scene != self.scene {
+            *self = Self::new(scene);
+        }
+    }
+}
+
+/// Where a menu's slots are among the game's slot ids, for the inventory, the crafting table and
+/// the block containers.
+#[derive(Clone, Copy)]
+struct MenuMap {
+    container: usize,
+    table: bool,
+    cells: usize,
+    plain: bool,
+}
+impl MenuMap {
+    fn main(&self) -> usize {
+        match (self.plain, self.table) {
+            (false, _) => self.container,
+            (true, true) => 10,
+            (true, false) => 9,
+        }
+    }
+    fn to_menu(self, g: usize) -> Option<usize> {
+        let main = self.main();
+        if self.plain {
+            match g {
+                100..109 if g - 100 < self.cells => Some(1 + g - 100),
+                500..504 if !self.table => Some(5 + g - 500),
+                504 if !self.table => Some(45),
+                9..36 => Some(main + g - 9),
+                0..9 => Some(main + 27 + g),
+                _ => None,
+            }
+        } else {
+            match g {
+                300.. if g < 300 + self.container => Some(g - 300),
+                9..36 => Some(main + g - 9),
+                0..9 => Some(main + 27 + g),
+                _ => None,
+            }
+        }
+    }
+    fn to_game(self, i: usize) -> Option<usize> {
+        let main = self.main();
+        if self.plain {
+            match i {
+                0 => None,
+                1..=9 if i - 1 < self.cells => Some(100 + i - 1),
+                5..9 if !self.table => Some(500 + i - 5),
+                45 if !self.table => Some(504),
+                _ if i >= main && i < main + 27 => Some(9 + i - main),
+                _ if i >= main + 27 && i < main + 36 => Some(i - main - 27),
+                _ => None,
+            }
+        } else if i < self.container {
+            Some(300 + i)
+        } else if i < self.container + 27 {
+            Some(9 + i - self.container)
+        } else {
+            Some(i - self.container - 27)
+        }
+    }
+}
+
+/// The open menu as the menu engine has it (`Game::menu_slots`).
+struct MenuSlots {
+    kind: horizon_client::menu::Kind,
+    /// Each menu slot's game slot: none for a result the game computes rather than keeps.
+    game_of: Vec<Option<usize>>,
+    map: Option<MenuMap>,
+    /// The game slot of that computed result (the crafting grid's, the crafter's), the menu's
+    /// output.
+    computed: Option<usize>,
+}
+
+impl MenuSlots {
+    /// The menu slot of game slot `g`.
+    fn to_menu(&self, g: usize) -> Option<usize> {
+        if self.computed == Some(g) {
+            return self.kind.output();
+        }
+        match self.map {
+            Some(map) => map.to_menu(g),
+            None => self.game_of.iter().position(|x| *x == Some(g)),
+        }
+    }
+}
+
 struct Game<'a> {
     /// Shared with an integrated server; `collision` and `motion` borrow from it.
     res: Arc<Resources>,
@@ -1172,17 +1347,15 @@ struct Game<'a> {
     carried: Option<ItemStack>,
     craft_grid: Vec<Option<ItemStack>>,
     craft_size: usize,
-    /// A quick craft drag over inventory slots: (button, game slots so far).
-    inv_drag: Option<(i32, Vec<usize>)>,
-    /// `AbstractContainerScreen`'s quick craft and skip-release state.
-    inv_clicks: horizon_client::container_screen::Clicks,
+    inv: ScreenClicks,
+    /// Menus, books and sign editors opened so far: part of the scene, as a server may open
+    /// another screen under the window id of the last.
+    screens_opened: u64,
     /// The Mouse Tweaks extra's drag and wheel (`tweaks`).
     tweaks: tweaks::Tweaks,
-    /// The last inventory click, for the double click that gathers a stack.
-    last_inv_click: Option<(std::time::Instant, usize, bool)>,
-    /// `lastQuickMoved`: what the last Shift click moved, which a Shift
-    /// double click moves every stack of.
-    last_quick_moved: Option<ItemStack>,
+    /// While the touch controls hold Shift down: whether a keyboard already held it, in `keys`
+    /// and in `physical_keys`, so it stays held when touch lets go.
+    touch_shift: Option<(bool, bool)>,
     /// Open container block entity, if any.
     container: Option<(i32, i32, i32)>,
     /// Open workstation menu (enchanting table, anvil, ...).
@@ -3004,9 +3177,15 @@ impl Game<'_> {
             ));
             return;
         }
+        self.open_menu_screen();
+        self.right = false;
+    }
+    /// A menu's screen opens over the world (a container's, a station's, a mount's, a
+    /// merchant's): another screen, even where a server opens it under the window id of the last.
+    pub(super) fn open_menu_screen(&mut self) {
+        self.screens_opened += 1;
         self.screen = Screen::Inventory;
         self.capture(false);
-        self.right = false;
     }
     /// FallingBlockEntity.tick: fall with 0.04 gravity and 0.98 drag, then land.
     fn tick_falling(&mut self) -> Result<()> {
@@ -4713,11 +4892,12 @@ impl Game<'_> {
             }
             stack.count = left;
         }
-        self.draw_item(batch, &stack, self.cursor.0 - 8.0, self.cursor.1 - 8.0);
+        let (x, y) = self.carried_anchor();
+        self.draw_item(batch, &stack, x - 8.0, y - 8.0);
     }
     /// The quick craft drag in progress, as the menu engine previews it.
     fn drag_view(&mut self) -> Option<DragView> {
-        let (ty, slots) = self.inv_drag.clone()?;
+        let (ty, slots) = self.inv.drag.clone()?;
         let mut view = None;
         self.menu_session(|menu, env, to_menu| {
             let menu_slots: Option<Vec<usize>> = slots.iter().map(|&g| to_menu(g)).collect();
@@ -5216,6 +5396,12 @@ impl Game<'_> {
             _ => self.slot_mut(i).clone(),
         }
     }
+    /// Slot `i` of the open menu is a result or output, as the menu engine has it: nothing can
+    /// be put there, and a click with its item in hand takes another craft, trade or smelt.
+    pub(super) fn output_slot(&self, i: usize) -> bool {
+        self.menu_slots()
+            .is_some_and(|m| m.to_menu(i).is_some_and(|s| m.kind.output() == Some(s)))
+    }
     fn craft_result(&self) -> Option<ItemStack> {
         self.craft_recipe().map(|(_, result)| result)
     }
@@ -5405,6 +5591,60 @@ impl Game<'_> {
             self.draw_inventory_effects(batch, (ox, oy), 176);
         }
     }
+    /// What the screen shows, as an identity: the screen, the view of a screen with views of its
+    /// own (the title, the options, World Options), and the menu or container behind it. Another
+    /// one is another vanilla `Screen` object: what the last one kept between clicks is gone,
+    /// and fingers on it do nothing more.
+    pub(super) fn scene(&self) -> u64 {
+        use std::mem::discriminant;
+        // A screen whose own sub-screens Escape closes says which shows; a new screen decides.
+        let view = match self.screen {
+            Screen::Options => scene_id(self.ui.options.view()),
+            Screen::WorldOptions => scene_id(
+                self.world_options
+                    .as_ref()
+                    .map(lan_screen::WorldOptions::view),
+            ),
+            Screen::Playing
+            | Screen::GameModeSwitcher
+            | Screen::Paused
+            | Screen::Chat
+            | Screen::Creative
+            | Screen::Inventory
+            | Screen::Dead
+            | Screen::Stats
+            | Screen::Advancements
+            | Screen::Friends
+            | Screen::CommandBlock
+            | Screen::Win => 0,
+        };
+        scene_id(Scene {
+            screen: self.screen,
+            view: scene_id((self.title.as_ref().map(title_page), view)),
+            container: self.container,
+            station: self.station.as_ref().map(|s| discriminant(&s.kind)),
+            window: self
+                .remote
+                .as_ref()
+                .and_then(|r| r.menu.as_ref())
+                .map(|m| m.0),
+            mount: self.mount_active(),
+            opened: self.screens_opened,
+            covers: self.covers(),
+        })
+    }
+    fn covers(&self) -> Covers {
+        Covers {
+            title: self.title.is_some(),
+            pack_prompt: self.server_packs.prompt.is_some(),
+            book: self.book.is_some(),
+            sign: self.sign_edit.is_some(),
+        }
+    }
+    /// An inventory is shown and takes the mouse.
+    pub(super) fn inventory_open(&self) -> bool {
+        inventory_takes_mouse(self.screen, self.covers())
+    }
     pub(super) fn close_container(&mut self) {
         self.close_station();
         self.mount_closed();
@@ -5564,79 +5804,10 @@ impl Game<'_> {
         };
         self.audio.play(sound, Some(at), volume, pitch);
     }
-    /// The open menu as the verified engine (`horizon_client::menu`): the
-    /// game's slots are copied in, `run` acts on it, and the slots, carried
-    /// stack, menu data and drops are copied back when it returns Some(true)
-    /// (Some(false): handled, nothing kept; None: not handled). False when the
-    /// open screen is not one the engine models or `run` did not handle it.
-    pub(super) fn menu_session(
-        &mut self,
-        run: impl FnOnce(
-            &mut horizon_client::menu::Menu,
-            &horizon_client::menu::Env,
-            &dyn Fn(usize) -> Option<usize>,
-        ) -> Option<bool>,
-    ) -> bool {
-        use horizon_client::menu::{Env, Kind, Menu};
-        #[derive(Clone, Copy)]
-        struct Map {
-            container: usize,
-            table: bool,
-            cells: usize,
-            plain: bool,
-        }
-        impl Map {
-            fn main(&self) -> usize {
-                match (self.plain, self.table) {
-                    (false, _) => self.container,
-                    (true, true) => 10,
-                    (true, false) => 9,
-                }
-            }
-            fn to_menu(self, g: usize) -> Option<usize> {
-                let main = self.main();
-                if self.plain {
-                    match g {
-                        200 => Some(0),
-                        100..109 if g - 100 < self.cells => Some(1 + g - 100),
-                        500..504 if !self.table => Some(5 + g - 500),
-                        504 if !self.table => Some(45),
-                        9..36 => Some(main + g - 9),
-                        0..9 => Some(main + 27 + g),
-                        _ => None,
-                    }
-                } else {
-                    match g {
-                        300.. if g < 300 + self.container => Some(g - 300),
-                        9..36 => Some(main + g - 9),
-                        0..9 => Some(main + 27 + g),
-                        _ => None,
-                    }
-                }
-            }
-            fn to_game(self, i: usize) -> Option<usize> {
-                let main = self.main();
-                if self.plain {
-                    match i {
-                        0 => None,
-                        1..=9 if i - 1 < self.cells => Some(100 + i - 1),
-                        5..9 if !self.table => Some(500 + i - 5),
-                        45 if !self.table => Some(504),
-                        _ if i >= main && i < main + 27 => Some(9 + i - main),
-                        _ if i >= main + 27 && i < main + 36 => Some(i - main - 27),
-                        _ => None,
-                    }
-                } else if i < self.container {
-                    Some(300 + i)
-                } else if i < self.container + 27 {
-                    Some(9 + i - self.container)
-                } else {
-                    Some(i - self.container - 27)
-                }
-            }
-        }
-        // Menu slot -> game slot, for every menu slot.
-        let mut plain_map = None;
+    /// The open menu as the menu engine has it: its kind, and where its slots are among the
+    /// game's. None for a screen the engine doesn't model.
+    fn menu_slots(&self) -> Option<MenuSlots> {
+        use horizon_client::menu::{Kind, Menu};
         let crafter_open = matches!(self.container_kind(), Some(BlockEntity::Crafter(_)));
         let loom_open = self
             .station
@@ -5657,7 +5828,7 @@ impl Game<'_> {
         let smithing_open = station_kind == Some(stations::Kind::Smithing);
         let enchanting_open = station_kind == Some(stations::Kind::Enchanting);
         let beacon_open = station_kind == Some(stations::Kind::Beacon);
-        let (kind, game_of): (Kind, Vec<Option<usize>>) = if self.creative_tab_open() {
+        let (kind, game_of) = if self.creative_tab_open() {
             // ItemPickerMenu: the display slots (clicked by the screen), then the hotbar.
             let mut v = vec![None; 45];
             v.extend((0..9).map(Some));
@@ -5766,9 +5937,9 @@ impl Game<'_> {
                         ),
                         3,
                     ),
-                    _ => return false,
+                    _ => return None,
                 };
-                let map = Map {
+                let map = MenuMap {
                     container: count,
                     table: false,
                     cells: 0,
@@ -5777,7 +5948,7 @@ impl Game<'_> {
                 (kind, map)
             } else if self.station.is_none() && !self.mount_active() {
                 let table = self.craft_size == 3;
-                let map = Map {
+                let map = MenuMap {
                     container: 0,
                     table,
                     cells: self.craft_size * self.craft_size,
@@ -5792,17 +5963,43 @@ impl Game<'_> {
                     map,
                 )
             } else {
-                return false;
+                return None;
             };
             let total = Menu::new(kind).slot_count();
-            plain_map = Some(map);
-            (kind, (0..total).map(|i| map.to_game(i)).collect())
+            return Some(MenuSlots {
+                kind,
+                game_of: (0..total).map(|i| map.to_game(i)).collect(),
+                map: Some(map),
+                computed: map.plain.then_some(200),
+            });
         };
-        // The plain map also takes the crafting result slot (a shift-click on it).
-        let to_menu = |g: usize| match plain_map {
-            Some(map) => map.to_menu(g),
-            None => game_of.iter().position(|x| *x == Some(g)),
+        let computed = (kind == Kind::CrafterBlock).then_some(machines::CRAFTER_RESULT);
+        Some(MenuSlots {
+            kind,
+            game_of,
+            map: None,
+            computed,
+        })
+    }
+    /// The open menu as the verified engine (`horizon_client::menu`): the
+    /// game's slots are copied in, `run` acts on it, and the slots, carried
+    /// stack, menu data and drops are copied back when it returns Some(true)
+    /// (Some(false): handled, nothing kept; None: not handled). False when the
+    /// open screen is not one the engine models or `run` did not handle it.
+    pub(super) fn menu_session(
+        &mut self,
+        run: impl FnOnce(
+            &mut horizon_client::menu::Menu,
+            &horizon_client::menu::Env,
+            &dyn Fn(usize) -> Option<usize>,
+        ) -> Option<bool>,
+    ) -> bool {
+        use horizon_client::menu::{Env, Kind, Menu};
+        let Some(slots) = self.menu_slots() else {
+            return false;
         };
+        let (kind, game_of) = (slots.kind, &slots.game_of);
+        let to_menu = |g: usize| slots.to_menu(g);
         let mut menu = Menu::new(kind);
         if matches!(kind, Kind::Mount(_)) {
             menu.mount = self.mount_menu_entity();
@@ -5852,7 +6049,11 @@ impl Game<'_> {
                 .collect();
             self.level_maps(&held)
         });
-        let next_map = if merchant_open { self.peek_map_id() } else { 0 };
+        let next_map = if kind == Kind::Merchant {
+            self.peek_map_id()
+        } else {
+            0
+        };
         let tag = |t: &str| self.structure_tag(t);
         let maps = trading::GameMaps {
             terrain: self.end.locator(),
@@ -5881,7 +6082,7 @@ impl Game<'_> {
         menu.creative = creative;
         menu.selected = self.selected;
         menu.levels = self.experience.level;
-        if anvil_open {
+        if kind == Kind::Anvil {
             // The rename box as AnvilScreen.onNameChanged gives it to the menu.
             menu.anvil.name = self.station.as_ref().map(|s| self.anvil_item_name(s));
         }
@@ -6043,6 +6244,12 @@ impl Game<'_> {
         }
         true
     }
+    /// An item tab's display slot shows an item at the scroll position.
+    fn creative_display_filled(&self, slot: usize) -> bool {
+        let first = self.creative_screen.first_row(&self.pack.names);
+        let shown = self.creative_screen.items(&self.pack.names).len();
+        first * 9 + slot - Creative::DISPLAY < shown
+    }
     /// `CreativeModeInventoryScreen.keyPressed` on the search tab: a hotbar
     /// key over a slot swaps before the search box sees it.
     fn search_tab_hotbar_key(&mut self, code: KeyCode) -> bool {
@@ -6062,13 +6269,9 @@ impl Game<'_> {
         let batch = HudBatch::new(size);
         let hover = match self.slot_at(&batch, self.cursor.0, self.cursor.1) {
             None => Hover::Nothing,
-            Some(slot) if slot >= Creative::DISPLAY => {
-                let first = self.creative_screen.first_row(&self.pack.names);
-                let shown = self.creative_screen.items(&self.pack.names).len();
-                Hover::Display {
-                    filled: first * 9 + slot - Creative::DISPLAY < shown,
-                }
-            }
+            Some(slot) if slot >= Creative::DISPLAY => Hover::Display {
+                filled: self.creative_display_filled(slot),
+            },
             Some(_) => Hover::Slot,
         };
         search_key_swaps(numeric, hotbar_key, hover, self.carried.is_some())
@@ -6104,6 +6307,45 @@ impl Game<'_> {
         }
         done
     }
+    /// The mouse wheel over the title screen or a menu, `dy` lines (`dx` sideways) after
+    /// Discrete Scrolling and the wheel sensitivity.
+    pub(super) fn screen_wheel(&mut self, dx: f32, d: f32) {
+        if let Some(title) = &mut self.title
+            && self.screen != Screen::Win
+        {
+            let size = self
+                .window
+                .as_ref()
+                .map(|w| w.inner_size())
+                .unwrap_or_default();
+            let batch = HudBatch::new([size.width, size.height]);
+            title.scroll_worlds(d, self.cursor, (batch.width, batch.height));
+        }
+        if self.screen == Screen::Chat && d != 0.0 {
+            self.chat_scroll(d);
+        }
+        if self.screen == Screen::Options && d != 0.0 {
+            self.options_scroll(d);
+        }
+        if self.screen == Screen::Creative && d != 0.0 {
+            self.creative_screen.wheel(f64::from(d), &self.pack.names);
+        }
+        if self.screen == Screen::Inventory
+            && d != 0.0
+            && !self.tweak_scroll(d, self.inventory_target().0)
+        {
+            self.station_scroll(d);
+        }
+        if self.screen == Screen::Stats && d != 0.0 {
+            self.stats_scroll(d);
+        }
+        if self.screen == Screen::WorldOptions && d != 0.0 {
+            self.world_options_scroll(d);
+        }
+        if self.screen == Screen::Advancements {
+            self.advancements_scroll(dx, d);
+        }
+    }
     /// The plain inventory mouse press: starts a quick craft drag when a
     /// stack is held, gathers on a double click, else the normal click.
     fn inventory_press(&mut self, right: bool) {
@@ -6115,7 +6357,7 @@ impl Game<'_> {
         let (slot, outside) = self.inventory_target();
         let shift = self.has_shift_down();
         let target = Target::of(slot, outside);
-        let input = self.inv_clicks.press(
+        let input = self.inv.clicks.press(
             &target,
             Self::screen_button(right),
             self.carried.is_none(),
@@ -6127,8 +6369,8 @@ impl Game<'_> {
             // starts a drag whose release drops it.
             match input {
                 Some(input) => self.throw_click(right, input),
-                None if self.inv_clicks.quick_crafting().is_some() => {
-                    self.inv_drag = Some((i32::from(right), Vec::new()));
+                None if self.inv.clicks.quick_crafting().is_some() => {
+                    self.inv.drag = Some((i32::from(right), Vec::new()));
                 }
                 None => {}
             }
@@ -6142,15 +6384,15 @@ impl Game<'_> {
             && slot != 200
         {
             let now = std::time::Instant::now();
-            let double = self.last_inv_click.is_some_and(|(at, last, was_right)| {
+            let double = self.inv.last_click.is_some_and(|(at, last, was_right)| {
                 last == slot && was_right == right && now.duration_since(at).as_millis() < 250
             });
-            self.last_inv_click = Some((now, slot, right));
+            self.inv.last_click = Some((now, slot, right));
             // mouseClicked's QUICK_MOVE (and Horizon's at-press QUICK_MOVE
             // of a carried stack, mouseReleased's in vanilla) remember the
             // stack it moves.
             if input == Some(Input::QuickMove) || (self.carried.is_some() && !double) {
-                self.last_quick_moved = self.slot_view(slot);
+                self.inv.last_quick_moved = self.slot_view(slot);
             }
             if double && !right {
                 // mouseReleased: every stack of lastQuickMoved's item in the
@@ -6162,7 +6404,7 @@ impl Game<'_> {
                     self.click_inventory(right);
                     return;
                 }
-                if let Some(moved) = self.last_quick_moved.clone() {
+                if let Some(moved) = self.inv.last_quick_moved.clone() {
                     if self.remote.is_some() {
                         self.remote_quick_move_all(slot, &moved);
                     } else {
@@ -6171,8 +6413,8 @@ impl Game<'_> {
                         });
                     }
                 }
-                self.last_inv_click = None;
-                self.inv_clicks.skip_release();
+                self.inv.last_click = None;
+                self.inv.clicks.skip_release();
                 return;
             }
         }
@@ -6186,14 +6428,14 @@ impl Game<'_> {
             let double = !right
                 && !display
                 && self.carried.is_some()
-                && self.last_inv_click.is_some_and(|(at, last, was_right)| {
+                && self.inv.last_click.is_some_and(|(at, last, was_right)| {
                     last == slot && !was_right && now.duration_since(at).as_millis() < 250
                 });
-            self.last_inv_click = Some((now, slot, right));
+            self.inv.last_click = Some((now, slot, right));
             if double && self.menu_click(Some(slot), 0, Input::PickupAll) {
-                self.last_inv_click = None;
+                self.inv.last_click = None;
                 // The double click's own release (`mouseReleased`'s PICKUP_ALL).
-                self.inv_clicks.skip_release();
+                self.inv.clicks.skip_release();
                 return;
             }
             if self.carried.is_some() {
@@ -6203,7 +6445,7 @@ impl Game<'_> {
                 } else {
                     Vec::new()
                 };
-                self.inv_drag = Some((ty, first));
+                self.inv.drag = Some((ty, first));
                 return;
             }
         }
@@ -6214,8 +6456,8 @@ impl Game<'_> {
                 Some(input) => {
                     self.menu_click(slot, i32::from(right), input);
                 }
-                None if self.inv_clicks.quick_crafting().is_some() => {
-                    self.inv_drag = Some((i32::from(right), Vec::new()));
+                None if self.inv.clicks.quick_crafting().is_some() => {
+                    self.inv.drag = Some((i32::from(right), Vec::new()));
                 }
                 None => {}
             }
@@ -6234,12 +6476,47 @@ impl Game<'_> {
         }
         self.click_inventory(right);
     }
+    /// A touch drag's stack put down at `at` (physical pixels): a left click there while the
+    /// hand holds a stack.
+    pub(super) fn inventory_put_down(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        id: WindowId,
+        device_id: DeviceId,
+        at: [f64; 2],
+    ) {
+        if self.carried.is_none() {
+            return;
+        }
+        self.inv.last_click = None;
+        let position = winit::dpi::PhysicalPosition::new(at[0], at[1]);
+        let button = |state| WindowEvent::MouseInput {
+            device_id,
+            state,
+            button: MouseButton::Left,
+        };
+        for event in [
+            WindowEvent::CursorMoved {
+                device_id,
+                position,
+            },
+            button(ElementState::Pressed),
+            button(ElementState::Released),
+        ] {
+            self.window_event(event_loop, id, event);
+        }
+    }
+    /// A press on an inventory taken back (a cancelled touch, or the scene changed under it):
+    /// what it began is forgotten, and its release clicks nothing, as on a new screen.
+    pub(super) fn inventory_abort(&mut self) {
+        self.inv = ScreenClicks::new(self.scene());
+    }
     /// Mouse movement while a quick craft drag is running.
     fn inventory_drag_move(&mut self) {
         if self.tweaks_on() && self.tweak_drag_move(self.inventory_target().0) {
             return;
         }
-        let Some((ty, slots)) = self.inv_drag.clone() else {
+        let Some((ty, slots)) = self.inv.drag.clone() else {
             return;
         };
         let Some(r) = self.renderer.as_ref() else {
@@ -6251,7 +6528,7 @@ impl Game<'_> {
             && slot < Creative::DISPLAY
             && !slots.contains(&slot)
             && self.quick_craft_accepts(slot, ty, slots.len())
-            && let Some((_, slots)) = self.inv_drag.as_mut()
+            && let Some((_, slots)) = self.inv.drag.as_mut()
         {
             slots.push(slot);
         }
@@ -6285,6 +6562,10 @@ impl Game<'_> {
     }
     /// `hasClickedOutside` of the open screen at the cursor.
     fn clicked_outside(&self, batch: &HudBatch) -> bool {
+        self.clicked_outside_at(batch, self.cursor)
+    }
+    /// `hasClickedOutside` of the open screen at `(x, y)`, GUI pixels.
+    fn clicked_outside_at(&self, batch: &HudBatch, (x, y): (f32, f32)) -> bool {
         use horizon_client::container_screen::{Book, Image, clicked_outside};
         let (ox, oy) = self.inventory_origin(batch);
         let (shift, width, height) = if self.screen == Screen::Creative {
@@ -6309,12 +6590,7 @@ impl Game<'_> {
                 visible,
                 selected_tab_hovered: tab_hovered,
             });
-        clicked_outside(
-            f64::from(self.cursor.0),
-            f64::from(self.cursor.1),
-            image,
-            book,
-        )
+        clicked_outside(f64::from(x), f64::from(y), image, book)
     }
     /// A click outside the window (slot id -999): `THROW` does nothing; a
     /// `PICKUP` drops the carried stack (left) or one of it (right), thrown
@@ -6359,8 +6635,8 @@ impl Game<'_> {
         use horizon_client::container_screen::{Release, Target};
         self.tweak_release();
         let (slot, outside) = self.inventory_target();
-        let dragged = self.inv_drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
-        let release = self.inv_clicks.release(
+        let dragged = self.inv.drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
+        let release = self.inv.clicks.release(
             &Target::of(slot, outside),
             Self::screen_button(right),
             self.carried.is_none(),
@@ -6371,12 +6647,12 @@ impl Game<'_> {
         match (release, Target::of(slot, outside)) {
             (Release::QuickCraft, _) => self.inventory_release(),
             (Release::Click(input), Target::Outside) => {
-                self.inv_drag = None;
+                self.inv.drag = None;
                 self.throw_click(right, input);
             }
-            (Release::Click(input), Target::Slot(slot)) if self.inv_drag.is_some() => {
+            (Release::Click(input), Target::Slot(slot)) if self.inv.drag.is_some() => {
                 // The drag never reached a slot: a plain click where it ends.
-                self.inv_drag = None;
+                self.inv.drag = None;
                 if !self.menu_click(Some(slot), i32::from(right), input) {
                     self.click_inventory(right);
                 }
@@ -6384,7 +6660,22 @@ impl Game<'_> {
                     self.container_changed(key);
                 }
             }
-            _ => self.inv_drag = None,
+            _ => self.inv.drag = None,
+        }
+    }
+    /// The pick block action (`keyPickItem`) pressed or released on an inventory with nothing
+    /// over it, by its mouse button or a touch's long press on a creative item.
+    pub(super) fn inventory_pick(&mut self, down: bool) {
+        if !self.inventory_open() {
+            return;
+        }
+        if down {
+            self.inventory_pick_press();
+        } else {
+            self.inventory_pick_release();
+        }
+        if let Some(key) = self.container {
+            self.container_changed(key);
         }
     }
     /// A press of the pick block button (`keyPickItem`, the middle button by
@@ -6396,8 +6687,8 @@ impl Game<'_> {
     fn inventory_pick_press(&mut self) {
         use horizon_client::container_screen::{Button, Target};
         let (slot, outside) = self.inventory_target();
-        let was_crafting = self.inv_clicks.quick_crafting().is_some();
-        let input = self.inv_clicks.press(
+        let was_crafting = self.inv.clicks.quick_crafting().is_some();
+        let input = self.inv.clicks.press(
             &Target::of(slot, outside),
             Button::Middle,
             self.carried.is_none(),
@@ -6409,12 +6700,12 @@ impl Game<'_> {
             (Some(input), Some(slot)) if !outside => {
                 self.menu_click(Some(slot), 2, input);
             }
-            (None, _) if !was_crafting && self.inv_clicks.quick_crafting().is_some() => {
+            (None, _) if !was_crafting && self.inv.clicks.quick_crafting().is_some() => {
                 // Item tab display slots take no drags.
                 let first = slot.filter(|&s| {
                     s != 200 && s < Creative::DISPLAY && self.quick_craft_accepts(s, 2, 0)
                 });
-                self.inv_drag = Some((2, first.into_iter().collect()));
+                self.inv.drag = Some((2, first.into_iter().collect()));
             }
             _ => {}
         }
@@ -6425,8 +6716,8 @@ impl Game<'_> {
     fn inventory_pick_release(&mut self) {
         use horizon_client::container_screen::{Button, Release, Target};
         let (slot, outside) = self.inventory_target();
-        let dragged = self.inv_drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
-        let release = self.inv_clicks.release(
+        let dragged = self.inv.drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
+        let release = self.inv.clicks.release(
             &Target::of(slot, outside),
             Button::Middle,
             self.carried.is_none(),
@@ -6437,16 +6728,16 @@ impl Game<'_> {
         match (release, slot) {
             (Release::QuickCraft, _) => self.inventory_release(),
             (Release::Click(input), Some(slot)) if !outside => {
-                self.inv_drag = None;
+                self.inv.drag = None;
                 self.menu_click(Some(slot), 2, input);
             }
-            _ => self.inv_drag = None,
+            _ => self.inv.drag = None,
         }
     }
     /// Mouse release: finishes a quick craft drag (one slot is a plain click).
     fn inventory_release(&mut self) {
         use horizon_client::menu::Input;
-        let Some((ty, slots)) = self.inv_drag.take() else {
+        let Some((ty, slots)) = self.inv.drag.take() else {
             return;
         };
         if slots.len() == 1 {
@@ -9402,7 +9693,7 @@ impl Game<'_> {
     fn tooltip(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32) {
         let atlas = &self.gui.atlas;
         let w = HudBatch::text_width(atlas, text);
-        let (x, y) = (x + 12.0, y - 12.0);
+        let (x, y) = (x + 12.0, horizon_client::ui::tooltip_top(y, 12.0));
         batch.fill(atlas, x - 3.0, y - 4.0, w + 6.0, 16.0, rgba(16, 0, 16, 240));
         batch.fill(atlas, x - 3.0, y - 3.0, w + 6.0, 1.0, rgba(80, 0, 255, 80));
         batch.fill(atlas, x - 3.0, y + 10.0, w + 6.0, 1.0, rgba(40, 0, 127, 80));
@@ -9429,6 +9720,18 @@ impl Game<'_> {
             batch.height,
             rgba(16, 16, 16, 160),
         );
+        if self.creative_screen.can_scroll(&self.pack.names) {
+            horizon_client::widgets::list(horizon_client::widgets::List {
+                rect: [ox + 9.0, oy + 18.0, 9.0 * 18.0, 5.0 * 18.0],
+                bar: Some([
+                    ox + Creative::SCROLL_X,
+                    oy + Creative::SCROLL_Y,
+                    Creative::SCROLL_WIDTH,
+                    Creative::SCROLL_HEIGHT,
+                ]),
+                line: 18.0,
+            });
+        }
         // Unselected tabs behind the panel, then the panel, then the selected tab.
         for (i, t) in tabs.iter().enumerate() {
             if i != selected {
@@ -9621,9 +9924,9 @@ impl Game<'_> {
         for (i, t) in tabs.iter().enumerate() {
             let (tx, ty) = Creative::tab_position(t);
             if cx >= ox + tx && cx < ox + tx + 26.0 && cy >= oy + ty && cy < oy + ty + 32.0 {
-                select_creative_tab(&mut self.creative_screen, &mut self.inv_clicks, i);
-                self.inv_drag = None;
-                self.last_inv_click = None;
+                select_creative_tab(&mut self.creative_screen, &mut self.inv.clicks, i);
+                self.inv.drag = None;
+                self.inv.last_click = None;
                 return;
             }
         }
@@ -9640,8 +9943,8 @@ impl Game<'_> {
                 } else {
                     self.carried = None;
                 }
-                self.inv_drag = None;
-                self.inv_clicks = Default::default();
+                self.inv.drag = None;
+                self.inv.clicks = Default::default();
             } else if self.slot_at(&batch, cx, cy).is_some() || self.clicked_outside(&batch) {
                 self.inventory_press(right);
             }
@@ -10775,6 +11078,7 @@ impl ApplicationHandler for Game<'_> {
         if self.window.as_ref().is_none_or(|w| w.id() != id) {
             return;
         }
+        self.inv.follow(self.scene());
         // Touch controls on iOS, where fingers are the only input; elsewhere touch screens keep
         // what the system makes of them. First, so every finger's end reaches them: the mouse
         // events they make go through the checks below.
@@ -10976,17 +11280,6 @@ impl ApplicationHandler for Game<'_> {
                         }) * wheel_sensitivity
                     };
                     let d = scaled(raw_y) as f32;
-                    if let Some(title) = &mut self.title
-                        && self.screen != Screen::Win
-                    {
-                        let size = self
-                            .window
-                            .as_ref()
-                            .map(|w| w.inner_size())
-                            .unwrap_or_default();
-                        let batch = HudBatch::new([size.width, size.height]);
-                        title.scroll_worlds(d, self.cursor, (batch.width, batch.height));
-                    }
                     if self.screen == Screen::Playing
                         && self.sleeping.is_none()
                         && self.player.is_some()
@@ -11011,30 +11304,7 @@ impl ApplicationHandler for Game<'_> {
                                 ) as usize;
                         }
                     }
-                    if self.screen == Screen::Chat && d != 0.0 {
-                        self.chat_scroll(d);
-                    }
-                    if self.screen == Screen::Options && d != 0.0 {
-                        self.options_scroll(d);
-                    }
-                    if self.screen == Screen::Creative && d != 0.0 {
-                        self.creative_screen.wheel(f64::from(d), &self.pack.names);
-                    }
-                    if self.screen == Screen::Inventory
-                        && d != 0.0
-                        && !self.tweak_scroll(d, self.inventory_target().0)
-                    {
-                        self.station_scroll(d);
-                    }
-                    if self.screen == Screen::Stats && d != 0.0 {
-                        self.stats_scroll(d);
-                    }
-                    if self.screen == Screen::WorldOptions && d != 0.0 {
-                        self.world_options_scroll(d);
-                    }
-                    if self.screen == Screen::Advancements {
-                        self.advancements_scroll(scaled(raw_x) as f32, d);
-                    }
+                    self.screen_wheel(scaled(raw_x) as f32, d);
                 }
                 WindowEvent::MouseInput { state, button, .. }
                     if self.server_packs.prompt.is_some() =>
@@ -11178,14 +11448,7 @@ impl ApplicationHandler for Game<'_> {
                             if self.settings.keys.get("key.pickItem")
                                 == horizon_client::keybinds::mouse_name(button)
                             {
-                                if pressed {
-                                    self.inventory_pick_press();
-                                } else {
-                                    self.inventory_pick_release();
-                                }
-                                if let Some(key) = self.container {
-                                    self.container_changed(key);
-                                }
+                                self.inventory_pick(pressed);
                             }
                         }
                         Screen::Inventory if pressed => {
@@ -11633,6 +11896,7 @@ impl ApplicationHandler for Game<'_> {
         if self.pending_save.is_some() {
             return;
         }
+        self.inv.follow(self.scene());
         self.poll_pads(event_loop);
         self.touch_frame(event_loop);
         self.system_keyboard_frame();
@@ -11755,11 +12019,10 @@ impl<'a> Game<'a> {
             carried: None,
             craft_grid: vec![None; 9],
             craft_size: 2,
-            inv_drag: None,
+            inv: ScreenClicks::new(0),
+            screens_opened: 0,
             tweaks: Default::default(),
-            inv_clicks: Default::default(),
-            last_inv_click: None,
-            last_quick_moved: None,
+            touch_shift: None,
             container: None,
             station: None,
             potions: Default::default(),
@@ -12933,6 +13196,8 @@ struct Loading {
     menu: startup_menu::StartupMenu,
     touch: horizon_client::touch::Touch,
     keyboard: typing::SystemKeyboard,
+    /// Frames drawn: the widgets a finger lands on are the last one's (`widgets::end_frame`).
+    frames: u64,
     error: Option<Box<dyn std::error::Error>>,
 }
 impl Loading {
@@ -13071,7 +13336,14 @@ impl Loading {
             return;
         };
         let mut batch = HudBatch::new(size);
+        if let Some(window) = &self.window {
+            let layout =
+                horizon_client::touch::Layout::new(size[0], size[1], window.scale_factor());
+            horizon_client::ui::set_tooltip_lift(self.touch.tooltip_lift(&layout) / batch.scale);
+        }
         self.draw_menu(&mut batch);
+        self.frames += 1;
+        horizon_client::widgets::end_frame(self.frames);
         let mut frame = loading_frame(&batch);
         frame.yaw = self.panorama_rotation.update(
             self.started.elapsed().as_secs_f32(),
@@ -13278,6 +13550,7 @@ fn run_loading(
         menu,
         touch: Default::default(),
         keyboard: Default::default(),
+        frames: 0,
         error: None,
     };
     let mut app = App::Loading(Box::new(loading));
@@ -13568,6 +13841,88 @@ mod tests {
         fn shared<T: Send + Sync>() {}
         shared::<Resources>();
         shared::<PackResources>();
+    }
+
+    #[test]
+    fn another_scene_starts_the_inventory_clicks_afresh() {
+        let mut inv = ScreenClicks::new(1);
+        // A press holding a stack starts a quick craft drag over slot 3.
+        let slot = Target::Slot(3usize);
+        assert_eq!(
+            inv.clicks.press(&slot, Button::Left, false, false, false),
+            None
+        );
+        inv.drag = Some((0, vec![3]));
+        inv.last_click = Some((std::time::Instant::now(), 3, false));
+        inv.last_quick_moved = Some(ItemStack::new("minecraft:oak_log", 20));
+        inv.follow(1);
+        assert!(inv.clicks.quick_crafting().is_some());
+        assert!(inv.drag.is_some() && inv.last_click.is_some() && inv.last_quick_moved.is_some());
+        inv.follow(2);
+        assert_eq!(inv.clicks.quick_crafting(), None);
+        assert!(inv.drag.is_none() && inv.last_click.is_none() && inv.last_quick_moved.is_none());
+        // The button held across the change comes up on the next screen clicking nothing, though
+        // a stack is in hand and the pointer is outside, where a click would throw it.
+        let release = |inv: &mut ScreenClicks, target| {
+            inv.clicks
+                .release(target, Button::Left, false, false, false, false)
+        };
+        assert_eq!(release(&mut inv, &Target::Outside), Release::Nothing);
+        // The next screen's own press and release, still holding the stack, is a plain click.
+        assert_eq!(
+            inv.clicks.press(&slot, Button::Left, false, false, false),
+            None
+        );
+        assert_eq!(
+            release(&mut inv, &slot),
+            Release::Click(horizon_client::menu::Input::Pickup)
+        );
+    }
+
+    #[test]
+    fn a_screen_opened_under_the_window_id_of_the_last_is_another_scene() {
+        // A server's 9x3 chest in window 2, then, with no close between, its 9x6 chest in window
+        // 2: under the same key, which no block has.
+        let chest = Scene {
+            screen: Screen::Inventory,
+            view: 0,
+            container: Some((i32::MIN, 0, 0)),
+            station: None,
+            window: Some(2),
+            mount: false,
+            opened: 7,
+            covers: Covers::default(),
+        };
+        assert_eq!(scene_id(chest), scene_id(Scene { ..chest }));
+        assert_ne!(scene_id(chest), scene_id(Scene { opened: 8, ..chest }));
+    }
+
+    #[test]
+    fn an_inventory_takes_the_mouse_only_with_nothing_over_it() {
+        let clear = Covers::default();
+        assert!(inventory_takes_mouse(Screen::Inventory, clear));
+        assert!(inventory_takes_mouse(Screen::Creative, clear));
+        assert!(!inventory_takes_mouse(Screen::Playing, clear));
+        for covers in [
+            Covers {
+                title: true,
+                ..clear
+            },
+            Covers {
+                pack_prompt: true,
+                ..clear
+            },
+            Covers {
+                book: true,
+                ..clear
+            },
+            Covers {
+                sign: true,
+                ..clear
+            },
+        ] {
+            assert!(!inventory_takes_mouse(Screen::Creative, covers));
+        }
     }
 
     #[test]

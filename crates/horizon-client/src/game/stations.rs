@@ -1530,6 +1530,13 @@ impl Game<'_> {
                         ox + 119.0,
                         oy + 15.0 + (41.0 * offs).floor(),
                     );
+                    if active {
+                        horizon_client::widgets::list(horizon_client::widgets::List {
+                            rect: [ox + 52.0, oy + 14.0, 64.0, 54.0],
+                            bar: Some([ox + 119.0, oy + 15.0, 12.0, 54.0]),
+                            line: 18.0,
+                        });
+                    }
                     if display {
                         let (start, selected) = (s.start, s.selected);
                         // graphics.item: the icon only, without the count.
@@ -1884,7 +1891,7 @@ impl Game<'_> {
             8.0 + 2.0 + (lines.len() - 1) as f32 * 10.0
         };
         let mut x = x + 12.0;
-        let mut y = y - 12.0;
+        let mut y = horizon_client::ui::tooltip_top(y, h + 4.0);
         if x + w > batch.width - 4.0 {
             x = (x - 28.0 - w).max(4.0);
         }

@@ -413,6 +413,7 @@ impl Game<'_> {
             bottom,
             content,
             self.stats_ui.scroll,
+            self.stats_rows().0 / 2.0,
         );
         self.draw_stats_footer(batch, w, h);
     }

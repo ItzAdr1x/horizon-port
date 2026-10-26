@@ -48,8 +48,8 @@ pub(super) struct WorldOptions {
 /// The screen on show: the options, the lock's question over them, or the
 /// RestrictionsScreen or InWorldGameRulesScreen they opened (all return to
 /// the same options).
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum View {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum View {
     Options,
     LockQuestion,
     Restrictions,
@@ -112,7 +112,51 @@ fn labelled(key: &str, value: Text) -> Text {
     Text::translate("options.generic_value", &[Text::translate(key, &[]), value])
 }
 
+/// What Escape on World Options leaves the game to do.
+#[derive(Debug, PartialEq)]
+enum Escaped {
+    /// What was over the options closed, or the game rules' question answered no.
+    Handled,
+    /// The game rules closed: what changed is applied.
+    Rules(Exit),
+    /// The options close.
+    Close,
+}
+
 impl WorldOptions {
+    /// What shows, as `Game::scene` tells screens apart: the view, and whether the game rules'
+    /// ConfirmScreen is in their place.
+    pub(super) fn view(&self) -> (View, bool) {
+        let confirming = self.rules.as_ref().is_some_and(RulesScreen::confirming);
+        (self.view, confirming)
+    }
+    /// Escape: the question and RestrictionsScreen return to the options (their onClose), which
+    /// close; the game rules ask first.
+    fn escape(&mut self) -> Escaped {
+        match self.view {
+            View::Options => Escaped::Close,
+            View::GameRules => match self.rules.as_mut().map(RulesScreen::escape) {
+                // A server may be slow to answer REQUEST_GAMERULE_VALUES.
+                None => {
+                    self.view = View::Options;
+                    Escaped::Handled
+                }
+                Some(None) => Escaped::Handled,
+                Some(Some(exit)) => {
+                    self.leave_rules();
+                    Escaped::Rules(exit)
+                }
+            },
+            View::LockQuestion | View::Restrictions => {
+                self.view = View::Options;
+                Escaped::Handled
+            }
+        }
+    }
+    fn leave_rules(&mut self) {
+        self.view = View::Options;
+        self.rules = None;
+    }
     /// Vanilla 26.3 WorldOptionsScreen.generalOptions: guests see difficulty,
     /// game rules and restrictions; game modes, commands and LAN are host-only.
     fn visible_buttons(&self, w: f32) -> Vec<(Button, f32, f32, f32)> {
@@ -530,31 +574,25 @@ impl Game<'_> {
         self.screen = Screen::Paused;
     }
 
-    /// Escape: the question and RestrictionsScreen return to the options
-    /// (their onClose), which close; the game rules ask first.
     pub(super) fn world_options_escape(&mut self) {
-        match self.world_options.as_mut() {
-            Some(o) if o.view == View::GameRules => {
-                if o.rules.is_none() {
-                    // A server may be slow to answer REQUEST_GAMERULE_VALUES.
-                    o.view = View::Options;
-                } else if let Some(exit) = o.rules.as_mut().and_then(RulesScreen::escape) {
-                    self.close_game_rules(exit);
-                }
-            }
-            Some(o) if o.view != View::Options => o.view = View::Options,
-            _ => self.close_world_options(),
+        match self.world_options.as_mut().map(WorldOptions::escape) {
+            Some(Escaped::Handled) => {}
+            Some(Escaped::Rules(exit)) => self.apply_game_rules(exit),
+            Some(Escaped::Close) | None => self.close_world_options(),
         }
     }
 
-    /// InWorldGameRulesScreen's exit, back to the options. Done sends the
-    /// changed rules (ServerboundSetGameRulePacket), which the server's
-    /// handleSetGameRule sets for a gamemaster and tells its operators.
+    /// InWorldGameRulesScreen's exit, back to the options.
     fn close_game_rules(&mut self, exit: Exit) {
         if let Some(o) = self.world_options.as_mut() {
-            o.view = View::Options;
-            o.rules = None;
+            o.leave_rules();
         }
+        self.apply_game_rules(exit);
+    }
+
+    /// Done sends the changed rules (ServerboundSetGameRulePacket), which the server's
+    /// handleSetGameRule sets for a gamemaster and tells its operators.
+    fn apply_game_rules(&mut self, exit: Exit) {
         let Exit::Apply(changes) = exit else {
             return;
         };
@@ -777,6 +815,7 @@ impl Game<'_> {
             h - FOOTER,
             o.content_height(),
             o.scroll.trunc(),
+            10.0,
         );
         ui::separators(batch, atlas, HEADER, h - FOOTER, true);
         for (b, bx, by, bw) in WorldOptions::footer(w, h) {
@@ -1154,6 +1193,24 @@ mod tests {
         };
         o.initial = o.snapshot();
         o
+    }
+
+    #[test]
+    fn escape_shows_something_else_each_time_until_the_options_close() {
+        let mut o = options(true, false);
+        // The game rules' view before the server's values arrive, too.
+        for view in [View::LockQuestion, View::Restrictions, View::GameRules] {
+            o.view = view;
+            let shown = o.view();
+            assert_eq!(o.escape(), Escaped::Handled, "{view:?}");
+            assert_ne!(o.view(), shown, "{view:?}");
+        }
+        o.view = View::GameRules;
+        o.rules = Some(RulesScreen::new(&Default::default()));
+        let shown = o.view();
+        assert_eq!(o.escape(), Escaped::Rules(Exit::Discard));
+        assert_ne!(o.view(), shown);
+        assert_eq!(o.escape(), Escaped::Close);
     }
 
     #[test]

@@ -695,6 +695,27 @@ impl Game<'_> {
         }
         false
     }
+    /// A recipe button at `p` (GUI pixels) with more than one recipe: its right click opens the
+    /// alternatives.
+    pub(super) fn recipe_alternatives_at(&self, p: (f32, f32)) -> bool {
+        let (Some(book_type), Some(batch)) = (self.active_book(), self.batch_for_size()) else {
+            return false;
+        };
+        if !self.book_open(book_type) || self.spectator() || self.recipe_ui.overlay.is_some() {
+            return false;
+        }
+        let (xo, yo) = self.book_origin(&batch);
+        let page = self
+            .recipe_ui
+            .view
+            .buttons
+            .iter()
+            .skip(self.recipe_ui.page * 20);
+        page.take(20).enumerate().any(|(n, button)| {
+            let (x, y) = Self::button_pos(xo, yo, n);
+            button.entries.len() > 1 && inside(p, x, y, 25.0, 25.0)
+        })
+    }
     /// How many displays the client's book holds.
     pub(super) fn recipe_book_known(&self) -> usize {
         self.recipe_ui.client.displays().len()

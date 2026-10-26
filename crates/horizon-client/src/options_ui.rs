@@ -860,7 +860,7 @@ pub fn apply_preset(s: &mut Settings) {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Page {
     Main,
     Video,
@@ -888,6 +888,15 @@ pub enum Page {
     Horizon,
     /// AI Agent: agent control on or off, whether an agent is connected, the connection details.
     Agent,
+}
+/// What the options show (`OptionsUi::view`): a page, or a screen over it that Escape closes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum View {
+    Page(Page),
+    /// The Packs page's ConfirmScreen.
+    PackConfirm,
+    /// A reload failure, dismissed before returning to the page.
+    Error,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -1129,6 +1138,17 @@ impl OptionsUi {
     }
     pub fn page(&self) -> Page {
         *self.stack.last().unwrap_or(&Page::Main)
+    }
+    /// What shows, as `key` takes Escape: the error, the pack screen's question, the page.
+    pub fn view(&self) -> View {
+        let page = self.page();
+        if self.resource_error.is_some() {
+            View::Error
+        } else if page == Page::Packs && self.pack_screen.as_ref().is_some_and(|p| p.confirming()) {
+            View::PackConfirm
+        } else {
+            View::Page(page)
+        }
     }
     /// Jump straight to a page (control socket / tests).
     pub fn show(&mut self, page: Page) {
@@ -2279,7 +2299,7 @@ impl OptionsUi {
         if list {
             ui::separators(batch, atlas, top, bottom, in_world);
             let sx = self.scrollbar_x(w);
-            ui::scrollbar(batch, atlas, sx, top, bottom, content, self.scroll);
+            ui::scrollbar(batch, atlas, sx, top, bottom, content, self.scroll, 18.0);
         }
         if self.page() == Page::Language {
             let mut search = self.language_search.clone();
@@ -2910,6 +2930,25 @@ mod tests {
     }
     fn atlas() -> HudAtlas {
         HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+    }
+
+    #[test]
+    fn escape_closes_the_error_then_each_page() {
+        use winit::keyboard::KeyCode;
+        let atlas = atlas();
+        let mut settings = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Video);
+        ui.resource_error = Some("broken pack".into());
+        let mut shown = vec![ui.view()];
+        for _ in 0..2 {
+            ui.key(&mut settings, &atlas, KeyCode::Escape, None);
+            shown.push(ui.view());
+        }
+        assert_eq!(
+            shown,
+            [View::Error, View::Page(Page::Video), View::Page(Page::Main)]
+        );
     }
 
     #[test]

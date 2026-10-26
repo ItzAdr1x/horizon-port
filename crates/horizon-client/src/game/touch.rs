@@ -1,11 +1,17 @@
-//! Touch input (`horizon_client::touch`) applied to the game: the pointer as mouse events, the
-//! view turned as by a grabbed mouse, and buttons as the vanilla key mappings they stand for.
+//! Touch input (`horizon_client::touch`) applied to the game: the pointer and its buttons as mouse
+//! events, the view turned as by a grabbed mouse, and buttons as the vanilla key mappings they
+//! stand for.
 use super::{Game, Loading, Screen};
 use horizon_client::{
     Result,
+    creative::Creative,
     hud::HudBatch,
     keymapping::{SNEAK, SPRINT},
-    touch::{Context, Input, Layout, Mode, Phase},
+    touch::{
+        self as fingers, Context, Here, Input, Layout, Mode, Phase, SlotKind, SlotSpot, Spot,
+        TouchEvent,
+    },
+    widgets::{self, Kind},
 };
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -14,6 +20,7 @@ use winit::{
     dpi::PhysicalPosition,
     event::{DeviceId, ElementState, MouseButton, Touch, TouchPhase, WindowEvent},
     event_loop::ActiveEventLoop,
+    keyboard::KeyCode,
     window::WindowId,
 };
 
@@ -30,27 +37,64 @@ fn phase(phase: TouchPhase) -> Phase {
     }
 }
 
-/// The mouse events a touch pointer stands for: a move there, then the left button's press or
-/// release.
-fn pointer_events(
-    device_id: DeviceId,
-    at: [f64; 2],
-    pressed: Option<bool>,
-) -> impl Iterator<Item = WindowEvent> {
-    let moved = WindowEvent::CursorMoved {
-        device_id,
-        position: PhysicalPosition::new(at[0], at[1]),
+/// The mouse event one of the touch layer's pointer inputs stands for. Its middle button is the
+/// pick block action, whatever that is bound to, which `Game::touch_pick` drives without one.
+fn mouse_event(device_id: DeviceId, input: &Input) -> Option<WindowEvent> {
+    let button = |button, state| {
+        let button = match button {
+            fingers::MouseButton::Left => MouseButton::Left,
+            fingers::MouseButton::Right => MouseButton::Right,
+            fingers::MouseButton::Middle => return None,
+        };
+        Some(WindowEvent::MouseInput {
+            device_id,
+            state,
+            button,
+        })
     };
-    let button = pressed.map(|pressed| WindowEvent::MouseInput {
-        device_id,
-        state: if pressed {
-            ElementState::Pressed
-        } else {
-            ElementState::Released
-        },
-        button: MouseButton::Left,
-    });
-    std::iter::once(moved).chain(button)
+    match *input {
+        Input::Pointer(at) => Some(WindowEvent::CursorMoved {
+            device_id,
+            position: PhysicalPosition::new(at[0], at[1]),
+        }),
+        Input::Press { button: b, .. } => button(b, ElementState::Pressed),
+        Input::Release(b) | Input::Abort(b) => button(b, ElementState::Released),
+        _ => None,
+    }
+}
+
+/// The creative screen's trash slot, which has no slot id of its own.
+const TRASH: u32 = u32::MAX;
+
+/// What last frame's widgets show at `p` (GUI pixels, `scale` physical pixels each): a list
+/// that scrolls and its scrollbar, sliders and text fields.
+fn widget_here(p: (f32, f32), scale: f32) -> Here {
+    let inside = |[x, y, w, h]: [f32; 4]| (x..x + w).contains(&p.0) && (y..y + h).contains(&p.1);
+    let list = widgets::list_at(p.0, p.1);
+    let target = widgets::last_targets()
+        .into_iter()
+        .rev()
+        .find(|t| inside(t.rect));
+    let spot = match target {
+        _ if list.and_then(|l| l.bar).is_some_and(inside) => Spot::Grab,
+        Some(t) if matches!(t.kind, Kind::Slider { .. }) => Spot::Slider,
+        Some(t) if t.kind == Kind::Field => Spot::Field,
+        _ => Spot::Plain,
+    };
+    Here {
+        spot,
+        list: list.map(|l| l.line * scale),
+        ..Here::default()
+    }
+}
+
+fn touch_event(touch: &Touch, here: Here) -> TouchEvent {
+    TouchEvent {
+        id: touch.id,
+        phase: phase(touch.phase),
+        at: [touch.location.x, touch.location.y],
+        here,
+    }
 }
 
 impl Game<'_> {
@@ -83,18 +127,91 @@ impl Game<'_> {
         let Some(layout) = self.touch_layout() else {
             return;
         };
-        let at = [touch.location.x, touch.location.y];
+        let here = if self.pad_in_menu() {
+            self.touch_here([touch.location.x, touch.location.y])
+        } else {
+            Here::default()
+        };
+        let context = self.touch_context();
         let inputs = self
             .touch
-            .touch(&layout, touch.id, phase(touch.phase), at, Instant::now());
+            .touch(&layout, context, touch_event(&touch, here), Instant::now());
         self.apply_touch(event_loop, id, touch.device_id, inputs);
     }
 
-    /// Once a frame, after the pads: what the screen shows, and held fingers.
-    pub(super) fn touch_frame(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(id) = self.window.as_ref().map(|w| w.id()) else {
-            return;
+    /// What lies under a finger at `at` (physical pixels) on the open menu. It hit-tests the
+    /// point, not `self.cursor`, which hasn't moved there yet.
+    fn touch_here(&mut self, at: [f64; 2]) -> Here {
+        let Some(batch) = self.gui_scale() else {
+            return Here::default();
         };
+        let p = (at[0] as f32 / batch.scale, at[1] as f32 / batch.scale);
+        let mut here = widget_here(p, batch.scale);
+        if self.inventory_open() {
+            if let Some(spot) = self.inventory_spot(&batch, p) {
+                here.spot = spot;
+            }
+            here.carrying = self.carried.is_some();
+        }
+        here
+    }
+
+    /// The first that claims the point on an inventory: creative's tabs (beyond the panel, but
+    /// theirs), trash and scrollbar, then beyond the panel (as `Target::of` has it), a slot.
+    fn inventory_spot(&mut self, batch: &HudBatch, p: (f32, f32)) -> Option<Spot> {
+        if self.screen == Screen::Creative {
+            let (ox, oy) = Self::creative_origin(batch);
+            let on_tab = self.creative_screen.tabs.iter().any(|t| {
+                let (tx, ty) = Creative::tab_position(t);
+                (ox + tx..ox + tx + 26.0).contains(&p.0) && (oy + ty..oy + ty + 32.0).contains(&p.1)
+            });
+            if on_tab {
+                return Some(Spot::Plain);
+            }
+            if self.creative_inventory_open() && Self::creative_trash_hovered(batch, p) {
+                return Some(Spot::Slot(SlotSpot {
+                    id: TRASH,
+                    filled: false,
+                    kind: SlotKind::Trash,
+                }));
+            }
+            if self.creative_screen.inside_scrollbar(p.0 - ox, p.1 - oy) {
+                return Some(Spot::Grab);
+            }
+        }
+        if self.recipe_alternatives_at(p) {
+            return Some(Spot::Secondary);
+        }
+        if self.clicked_outside_at(batch, p) {
+            return Some(Spot::Outside);
+        }
+        let id = self.slot_at(batch, p.0, p.1)?;
+        let (kind, filled) = match id {
+            id if id >= Creative::DISPLAY => (SlotKind::Display, self.creative_display_filled(id)),
+            id if self.output_slot(id) => (SlotKind::Result, self.slot_view(id).is_some()),
+            _ => (SlotKind::Normal, self.slot_view(id).is_some()),
+        };
+        Some(Spot::Slot(SlotSpot {
+            id: id as u32,
+            filled,
+            kind,
+        }))
+    }
+
+    /// Where the carried stack is drawn (`draw_carried`): under the pointer, or, while a touch
+    /// screen's pointer is away, where the last finger lifted, so a stack picked up with a tap
+    /// stays in sight.
+    pub(super) fn carried_anchor(&self) -> (f32, f32) {
+        match (self.touch.rest(), self.gui_scale()) {
+            (Some([x, y]), Some(batch)) if self.cursor.0 < 0.0 && self.cursor.1 < 0.0 => {
+                (x as f32 / batch.scale, y as f32 / batch.scale)
+            }
+            _ => self.cursor,
+        }
+    }
+
+    /// What the game shows the touch controls.
+    fn touch_context(&self) -> Context {
         let mode = if self.title.is_some() {
             Mode::Title
         } else if self.pad_in_menu() || self.server_packs.prompt.is_some() {
@@ -102,18 +219,31 @@ impl Game<'_> {
         } else {
             Mode::Playing
         };
+        Context {
+            mode,
+            scene: self.scene(),
+            movement: self.settings.controller.touch_movement,
+            flying: self.player.as_ref().is_some_and(|p| p.flying),
+            held_item_used_over_time: self.held_item_used_over_time(),
+            slots: self.inventory_open(),
+        }
+    }
+
+    /// Once a frame, after the pads: what the screen shows, and held fingers.
+    pub(super) fn touch_frame(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(id) = self.window.as_ref().map(|w| w.id()) else {
+            return;
+        };
         // A thumb resting on the joystick is play, as a tilted stick is (`poll_pads`).
         if self.touch.active() {
             self.last_input = Instant::now();
         }
-        let context = Context {
-            mode,
-            movement: self.settings.controller.touch_movement,
-            flying: self.player.as_ref().is_some_and(|p| p.flying),
-            held_item_used_over_time: self.held_item_used_over_time(),
-        };
+        let context = self.touch_context();
         let inputs = self.touch.frame(context, Instant::now());
         self.apply_touch(event_loop, id, DeviceId::dummy(), inputs);
+        if let (Some(layout), Some(batch)) = (self.touch_layout(), self.gui_scale()) {
+            horizon_client::ui::set_tooltip_lift(self.touch.tooltip_lift(&layout) / batch.scale);
+        }
     }
 
     fn apply_touch(
@@ -128,21 +258,77 @@ impl Game<'_> {
         let busy = self.pending_save.is_some()
             || self.world_loader.is_some()
             || self.pending_entry.is_some();
+        // A click that changes the scene ends the batch's clicks: the rest were meant for the
+        // screen it left, and a button still to come up comes up clicking nothing.
+        let before = self.scene();
+        let mut changed = false;
         for input in inputs {
+            let input = match input {
+                Input::Release(button) if changed => Input::Abort(button),
+                Input::Press { .. } | Input::PutDown(_) | Input::Wheel(_) if changed => continue,
+                input => input,
+            };
+            let clicks = matches!(
+                input,
+                Input::Press { .. }
+                    | Input::Release(_)
+                    | Input::Abort(_)
+                    | Input::PutDown(_)
+                    | Input::Wheel(_)
+            );
             let lets_go = matches!(
                 input,
-                Input::Pointer { .. } | Input::Mapping(_, false) | Input::Sprint(false)
+                Input::Pointer(_)
+                    | Input::Release(_)
+                    | Input::Abort(_)
+                    | Input::Shift(false)
+                    | Input::Mapping(_, false)
+                    | Input::Sprint(false)
             );
             if busy && !lets_go {
                 continue;
             }
+            match input {
+                // A press of the touch layer's own never makes a double click (PICKUP_ALL).
+                Input::Press { fresh: true, .. } => self.inv.last_click = None,
+                // Whatever a mouse button's release would do to an inventory is undone first.
+                Input::Abort(_) => self.inventory_abort(),
+                _ => {}
+            }
             let result = match input {
-                Input::Pointer { at, pressed } => {
-                    for event in pointer_events(device_id, at, pressed) {
+                Input::Press {
+                    button: fingers::MouseButton::Middle,
+                    ..
+                } => {
+                    self.inventory_pick(true);
+                    Ok(())
+                }
+                Input::Release(fingers::MouseButton::Middle)
+                | Input::Abort(fingers::MouseButton::Middle) => {
+                    self.inventory_pick(false);
+                    Ok(())
+                }
+                Input::Pointer(_) | Input::Press { .. } | Input::Release(_) | Input::Abort(_) => {
+                    if let Some(event) = mouse_event(device_id, &input) {
                         self.window_event(event_loop, id, event);
                     }
                     Ok(())
                 }
+                Input::PutDown(at) => {
+                    self.inventory_put_down(event_loop, id, device_id, at);
+                    Ok(())
+                }
+                Input::Shift(down) => {
+                    self.touch_shift(down);
+                    Ok(())
+                }
+                // A finger's lines are its own: the mouse wheel's sensitivity and Discrete
+                // Scrolling don't change how far a drag scrolls.
+                Input::Wheel(lines) => {
+                    self.screen_wheel(0.0, lines);
+                    Ok(())
+                }
+                Input::Keyboard => Ok(()),
                 Input::Look([dx, dy]) => {
                     self.mouse.add_motion(dx, dy);
                     Ok(())
@@ -164,6 +350,28 @@ impl Game<'_> {
             };
             if let Err(e) = result {
                 log::warn!("Horizon: touch: {e}");
+            }
+            changed |= clicks && self.scene() != before;
+        }
+    }
+
+    /// Shift down or up around the touch controls' clicks, in `keys` and `physical_keys` as the
+    /// pad's quick move has it; a Shift a keyboard holds stays held.
+    fn touch_shift(&mut self, down: bool) {
+        let shift = KeyCode::ShiftLeft;
+        if down {
+            self.touch_shift.get_or_insert((
+                self.keys.contains(&shift),
+                self.physical_keys.contains(&shift),
+            ));
+            self.keys.insert(shift);
+            self.physical_keys.insert(shift);
+        } else if let Some((keys, physical)) = self.touch_shift.take() {
+            if !keys {
+                self.keys.remove(&shift);
+            }
+            if !physical {
+                self.physical_keys.remove(&shift);
             }
         }
     }
@@ -249,17 +457,90 @@ impl Loading {
             return Ok(());
         };
         let layout = Layout::new(r.config.width, r.config.height, window.scale_factor());
-        let at = [touch.location.x, touch.location.y];
-        let inputs = self
-            .touch
-            .touch(&layout, touch.id, phase(touch.phase), at, Instant::now());
+        let scale = HudBatch::new([r.config.width, r.config.height]).scale;
+        let p = (
+            touch.location.x as f32 / scale,
+            touch.location.y as f32 / scale,
+        );
+        let event = touch_event(&touch, widget_here(p, scale));
+        let context = Context {
+            mode: Mode::Title,
+            scene: self.scene(),
+            ..Context::default()
+        };
+        let inputs = self.touch.touch(&layout, context, event, Instant::now());
         for input in inputs {
-            if let Input::Pointer { at, pressed } = input {
-                for event in pointer_events(touch.device_id, at, pressed) {
-                    self.menu_event(event_loop, event)?;
+            match input {
+                Input::Pointer(_) | Input::Press { .. } | Input::Release(_) | Input::Abort(_) => {
+                    if let Some(event) = mouse_event(touch.device_id, &input) {
+                        self.menu_event(event_loop, event)?;
+                    }
                 }
+                Input::Wheel(lines) => self.menu_wheel(lines),
+                Input::Keyboard => {}
+                // Nothing of a world or an inventory is on the title screen.
+                Input::Shift(_)
+                | Input::PutDown(_)
+                | Input::Look(_)
+                | Input::Mapping(..)
+                | Input::Sprint(_)
+                | Input::Sneak
+                | Input::Tap
+                | Input::Hotbar(_)
+                | Input::Back => {}
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pick_action_reaches_no_mouse_binding() {
+        let device = DeviceId::dummy();
+        let middle = fingers::MouseButton::Middle;
+        let press = Input::Press {
+            button: middle,
+            fresh: true,
+        };
+        assert!(mouse_event(device, &press).is_none());
+        assert!(mouse_event(device, &Input::Release(middle)).is_none());
+        assert!(matches!(
+            mouse_event(device, &Input::Abort(fingers::MouseButton::Right)),
+            Some(WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Right,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn widgets_drawn_last_frame_say_what_a_finger_is_on() {
+        widgets::end_frame(1);
+        widgets::target_as([10.0, 10.0, 100.0, 20.0], Kind::Field);
+        let slider = Kind::Slider {
+            value: 0.5,
+            track: [10.0, 100.0],
+        };
+        widgets::target_as([10.0, 60.0, 100.0, 20.0], slider);
+        widgets::list(widgets::List {
+            rect: [0.0, 50.0, 200.0, 100.0],
+            bar: Some([150.0, 50.0, 6.0, 100.0]),
+            line: 18.0,
+        });
+        widgets::end_frame(2);
+        let at = |x, y| widget_here((x, y), 5.0);
+        assert_eq!(at(20.0, 20.0).spot, Spot::Field);
+        assert_eq!(at(20.0, 20.0).list, None);
+        assert_eq!(at(20.0, 70.0).spot, Spot::Slider);
+        assert_eq!(at(20.0, 70.0).list, Some(90.0), "a line in physical pixels");
+        assert_eq!(at(152.0, 70.0).spot, Spot::Grab);
+        assert_eq!(at(120.0, 120.0).spot, Spot::Plain);
+        assert_eq!(at(120.0, 120.0).list, Some(90.0));
+        assert_eq!(at(120.0, 170.0), Here::default());
     }
 }

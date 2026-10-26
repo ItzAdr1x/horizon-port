@@ -158,6 +158,31 @@ impl Kind {
             _ => return None,
         })
     }
+
+    /// The menu's result or output slot, if it has one (`Role::output`).
+    pub fn output(self) -> Option<usize> {
+        match self {
+            Self::Inventory | Self::Crafting => Some(0),
+            Self::Stonecutter => Some(1),
+            Self::Furnace(_)
+            | Self::Grindstone
+            | Self::Anvil
+            | Self::Cartography
+            | Self::Merchant => Some(2),
+            Self::Loom | Self::Smithing => Some(3),
+            Self::Crafter | Self::CrafterBlock => Some(45),
+            Self::Chest(_)
+            | Self::Hopper
+            | Self::Dispenser
+            | Self::Shulker
+            | Self::Brewing
+            | Self::Enchanting
+            | Self::Beacon
+            | Self::Lectern
+            | Self::Mount(_)
+            | Self::ItemPicker => None,
+        }
+    }
 }
 
 /// `Slot` subclasses that change the rules.
@@ -218,6 +243,24 @@ enum Role {
     /// An `ArmorSlot` of a mount for this `EquipmentSlot` ("saddle" or
     /// "body"): `isEquippableInSlot` for `Menu::mount`, one item.
     MountEquip(&'static str),
+}
+
+impl Role {
+    /// A result or output: `mayPlace` refuses every stack, and a take crafts, trades or smelts.
+    fn output(self) -> bool {
+        matches!(
+            self,
+            Role::Output
+                | Role::CraftResult
+                | Role::Inert
+                | Role::LoomResult
+                | Role::MerchantResult
+                | Role::StoneResult
+                | Role::GrindResult
+                | Role::CombineResult
+                | Role::CartoResult
+        )
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1219,7 +1262,7 @@ impl Menu {
 
     fn may_place(&self, env: &Env, s: usize, stack: &ItemStack) -> bool {
         match self.slots[s].role {
-            Role::Plain | Role::CreativeDisplay => true,
+            role if role.output() => false,
             Role::Armor(eq) => env
                 .items
                 .get(&stack.item)
@@ -1249,7 +1292,6 @@ impl Menu {
             }),
             Role::Shulker => Self::fits_inside(stack),
             Role::Fuel => Self::is_fuel(env, stack) || Self::is_bucket(stack),
-            Role::Output | Role::CraftResult | Role::Inert => false,
             Role::CrafterIn => self.data.get(self.slots[s].index) != Some(&1),
             Role::Potion => {
                 env.brewing.is_bottle(stack)
@@ -1269,7 +1311,6 @@ impl Menu {
             Role::LoomPattern => env.banners.is_pattern_item(env.items, stack),
             Role::GrindInput => crate::stations::grindstone_accepts(env.items, stack),
             Role::SmithInput(i) => env.station_recipes.smithing_accepts(i, stack),
-            Role::EnchantItem => true,
             Role::Lapis => &*stack.item == "minecraft:lapis_lazuli",
             Role::BeaconPay => env
                 .items
@@ -1278,12 +1319,8 @@ impl Menu {
                 .is_some_and(|t| t.contains(&*stack.item)),
             Role::CartoMap => stack.data().is_some_and(|d| d.map_id.is_some()),
             Role::CartoExtra => Self::is_carto_extra(stack),
-            Role::LoomResult
-            | Role::MerchantResult
-            | Role::StoneResult
-            | Role::GrindResult
-            | Role::CombineResult
-            | Role::CartoResult => false,
+            // `Slot.mayPlace`.
+            _ => true,
         }
     }
 
@@ -3043,6 +3080,40 @@ pub(crate) mod tests {
         let mut menu = Menu::new(kind);
         menu.creative = true;
         test(&env, &mut menu);
+    }
+
+    #[test]
+    fn the_outputs_are_each_menus_result_slot() {
+        for kind in [
+            Kind::Inventory,
+            Kind::Crafting,
+            Kind::Chest(3),
+            Kind::Hopper,
+            Kind::Dispenser,
+            Kind::Shulker,
+            Kind::Furnace("smelting"),
+            Kind::Brewing,
+            Kind::Crafter,
+            Kind::CrafterBlock,
+            Kind::Loom,
+            Kind::Stonecutter,
+            Kind::Grindstone,
+            Kind::Anvil,
+            Kind::Smithing,
+            Kind::Enchanting,
+            Kind::Beacon,
+            Kind::Cartography,
+            Kind::Lectern,
+            Kind::Merchant,
+            Kind::Mount(5),
+            Kind::ItemPicker,
+        ] {
+            let menu = Menu::new(kind);
+            let outputs: Vec<usize> = (0..menu.slot_count())
+                .filter(|&i| menu.slots[i].role.output())
+                .collect();
+            assert_eq!(outputs, Vec::from_iter(kind.output()), "{kind:?}");
+        }
     }
 
     /// `HorseInventoryMenu`: a shift-click wears horse armour, then saddles,

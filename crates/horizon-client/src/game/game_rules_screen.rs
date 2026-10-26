@@ -200,6 +200,10 @@ impl RulesScreen {
             None
         }
     }
+    /// ConfirmScreen "Game Rule Changes" shows in the rules' place.
+    pub(super) fn confirming(&self) -> bool {
+        self.confirm
+    }
     /// Escape: ConfirmScreen answers no; the rules close.
     pub(super) fn escape(&mut self) -> Option<Exit> {
         if self.confirm {
@@ -431,6 +435,7 @@ impl RulesScreen {
             h - FOOTER,
             content,
             self.scroll.trunc(),
+            ROW / 2.0,
         );
         // The header: the title centred over the search box.
         let title = Text::translate("editGamerule.title", &[]);
@@ -550,8 +555,8 @@ mod tests {
         assert_eq!(s.changes(), vec![("random_tick_speed", Value::Int(10))]);
         // Leaving with changes asks; No returns, Yes discards.
         assert_eq!(s.escape(), None);
-        assert!(s.confirm);
+        assert!(s.confirming());
         assert_eq!(s.escape(), None);
-        assert!(!s.confirm);
+        assert!(!s.confirming());
     }
 }

@@ -1,6 +1,7 @@
 //! Touch screens: Horizon's own (vanilla has no touch input), on iPhone and iPad, with Pocket
-//! Edition's controls. On the title screen and in menus a finger is the mouse pointer, and in a
-//! world's menus a Back button does what Escape does. In play:
+//! Edition's controls. On the title screen and in menus a finger is the mouse, its button
+//! waiting for the gesture (`menu`), and in a world's menus a Back button does what Escape does.
+//! In play:
 //!
 //! - the D-pad moves (forward, back, the sides, and the forward diagonals while forward is
 //!   held), a double tap on forward sprints, and its middle sneaks (a toggle) or, while flying,
@@ -20,8 +21,10 @@ use std::time::{Duration, Instant};
 mod draw;
 mod keys;
 mod layout;
+mod menu;
 use keys::Keys;
 pub use layout::{Button, Cell, Layout};
+pub use menu::{Here, MouseButton, SlotKind, SlotSpot, Spot};
 
 /// A finger held still on the view this long mines, or uses the held item.
 const HOLD: Duration = Duration::from_millis(300);
@@ -35,7 +38,7 @@ const DEADZONE: f32 = 0.15;
 const LOOK_SPEED: f64 = 0.5;
 /// Where the pointer goes when its finger lifts: nothing is under a touch screen's pointer, so
 /// nothing should stay hovered or show its tooltip.
-const AWAY: [f64; 2] = [-1.0, -1.0];
+pub const AWAY: [f64; 2] = [-1.0, -1.0];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -44,6 +47,16 @@ pub enum Phase {
     End,
     /// The system took the touch (a call, a system gesture): let go without tapping.
     Cancel,
+}
+
+/// One touch as the screen reports it, and what the game shows under it.
+#[derive(Clone, Copy, Debug)]
+pub struct TouchEvent {
+    pub id: u64,
+    pub phase: Phase,
+    /// Physical pixels.
+    pub at: [f64; 2],
+    pub here: Here,
 }
 
 /// What the screen shows, which decides what a finger does.
@@ -81,25 +94,48 @@ impl Movement {
     }
 }
 
-/// What the game tells the controls each frame.
+/// What the game tells the controls each frame, and with each touch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Context {
     pub mode: Mode,
+    /// What the screen shows, as an identity: the screen, its page, the menu behind it. When it
+    /// changes, fingers on the old one do nothing more.
+    pub scene: u64,
     pub movement: Movement,
     /// The player is flying: Jump goes up and the D-pad's middle down.
     pub flying: bool,
     /// The held item is used over time (food, a bow, a shield...): a held finger uses it.
     pub held_item_used_over_time: bool,
+    /// An inventory is open: the Shift button is there.
+    pub slots: bool,
 }
 
-/// What a touch does to the game.
+/// What a touch does to the game. On the title screen and in menus, only what a desk's mouse
+/// and keyboard would send, so nothing reaches a menu another way.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Input {
-    /// The mouse pointer at a physical position, pressed or released there.
-    Pointer {
-        at: [f64; 2],
-        pressed: Option<bool>,
+    /// The mouse pointer moves to a physical position: what is there is hovered.
+    Pointer([f64; 2]),
+    /// A mouse button goes down where the pointer is. `fresh`: a press of the touch layer's own
+    /// (a finger leaving where it landed), never the second click of a double click.
+    Press {
+        button: MouseButton,
+        fresh: bool,
     },
+    /// The mouse button goes up where the pointer is.
+    Release(MouseButton),
+    /// The mouse button goes up, and its release must click nothing: the touch was cancelled, or
+    /// the screen changed under it.
+    Abort(MouseButton),
+    /// The mouse wheel turns this many lines where the pointer is, up when positive.
+    Wheel(f32),
+    /// Shift goes down or up, as the physical key a keyboard's Shift is (`has_shift_down`).
+    Shift(bool),
+    /// If the hand holds a stack now, a left click at this point (physical pixels): a dragged
+    /// stack put down, or what that leaves in hand put back where it came from. Never a result.
+    PutDown([f64; 2]),
+    /// A tap focused a text field: the system keyboard is wanted.
+    Keyboard,
     /// Mouse movement turning the view.
     Look([f64; 2]),
     /// A vanilla key mapping pressed or released.
@@ -118,9 +154,8 @@ pub enum Input {
 /// What a finger does, decided where it lands.
 #[derive(Clone, Copy, Debug)]
 enum Role {
-    Pointer {
-        at: [f64; 2],
-    },
+    /// On the title screen or a menu.
+    Menu(menu::Gesture),
     /// On the D-pad: the square under it, which it may slide to another.
     Pad {
         cell: Option<Cell>,
@@ -142,7 +177,7 @@ enum Role {
     Descend,
     Hotbar,
     /// A finger that does nothing until it lifts: a second one on a menu or on the D-pad, the
-    /// middle's tap, or one the screen changed under.
+    /// middle's tap, or one the scene changed under.
     Spent,
 }
 
@@ -152,6 +187,7 @@ impl Role {
         match *self {
             Role::Button(Button::Jump) => Some("key.jump"),
             Role::Button(Button::Inventory) => Some("key.inventory"),
+            Role::Button(Button::Chat) => Some("key.chat"),
             Role::Descend => Some("key.sneak"),
             Role::Look { holding, .. } => holding,
             _ => None,
@@ -177,6 +213,7 @@ pub struct Touch {
     keys: Keys,
     /// A finger has touched the screen: the controls are drawn from then on.
     seen: bool,
+    menus: menu::Menus,
 }
 
 impl Touch {
@@ -203,15 +240,22 @@ impl Touch {
         !self.fingers.is_empty()
     }
 
+    /// A finger's event, on what the game shows now.
     pub fn touch(
         &mut self,
         layout: &Layout,
-        id: u64,
-        phase: Phase,
-        at: [f64; 2],
+        context: Context,
+        event: TouchEvent,
         now: Instant,
     ) -> Vec<Input> {
+        let TouchEvent {
+            id,
+            phase,
+            at,
+            here,
+        } = event;
         let mut out = Vec::new();
+        self.follow(context, now, &mut out);
         let index = self.fingers.iter().position(|f| f.id == id);
         match (phase, index) {
             (Phase::Start, _) => {
@@ -220,17 +264,27 @@ impl Touch {
                     self.release(finger.role, now, &mut out);
                 }
                 self.seen = true;
-                let role = self.land(layout, at, now, &mut out);
+                let role = if self.context.mode == Mode::Playing {
+                    self.land(layout, at, now, &mut out)
+                } else {
+                    self.land_menu(layout, at, here, now, &mut out)
+                };
                 self.fingers.push(Finger { id, role });
             }
             (Phase::Move, Some(i)) => {
                 let mut role = self.fingers[i].role;
-                self.slide(layout, &mut role, at, now, &mut out);
+                match &mut role {
+                    Role::Menu(gesture) => self.slide_menu(layout, gesture, at, here, &mut out),
+                    role => self.slide(layout, role, at, now, &mut out),
+                }
                 self.fingers[i].role = role;
             }
             (Phase::End, Some(i)) => {
                 let finger = self.fingers.remove(i);
-                self.lift(finger.role, at, now, &mut out);
+                match finger.role {
+                    Role::Menu(gesture) => self.lift_menu(gesture, at, here, &mut out),
+                    role => self.lift(role, now, &mut out),
+                }
             }
             (Phase::Cancel, Some(i)) => {
                 let finger = self.fingers.remove(i);
@@ -245,21 +299,9 @@ impl Touch {
     /// fingers held still long enough to mine or use.
     pub fn frame(&mut self, context: Context, now: Instant) -> Vec<Input> {
         let mut out = Vec::new();
-        let mode_changed = context.mode != self.context.mode;
-        self.context = context;
-        if mode_changed {
-            // What fingers held stops with the screen they held it on.
-            for i in 0..self.fingers.len() {
-                let role = std::mem::replace(&mut self.fingers[i].role, Role::Spent);
-                match role {
-                    Role::Pointer { at } => lift_pointer(at, &mut out),
-                    Role::Pad { .. } | Role::Stick { .. } => self.stop_moving(now, &mut out),
-                    _ => {}
-                }
-            }
-            self.keys.release_all(now, &mut out);
-        }
+        self.follow(context, now, &mut out);
         self.keys.due(now, &mut out);
+        self.menu_holds(now, &mut out);
         let mapping = if context.held_item_used_over_time {
             "key.use"
         } else {
@@ -281,6 +323,30 @@ impl Touch {
         out
     }
 
+    /// What the game shows now. Another mode or scene ends what every finger was doing: it does
+    /// nothing more until it lifts, a button it held down comes up clicking nothing, and Shift
+    /// lets go.
+    fn follow(&mut self, context: Context, now: Instant, out: &mut Vec<Input>) {
+        let changed = (context.mode, context.scene) != (self.context.mode, self.context.scene);
+        if !context.slots {
+            self.menus.shift.latch = menu::Latch::Off;
+        }
+        self.context = context;
+        if !changed {
+            return;
+        }
+        for i in 0..self.fingers.len() {
+            let role = std::mem::replace(&mut self.fingers[i].role, Role::Spent);
+            match role {
+                Role::Menu(gesture) => self.let_go(gesture, out),
+                Role::Pad { .. } | Role::Stick { .. } => self.stop_moving(now, out),
+                _ => {}
+            }
+        }
+        self.menus.shift = Default::default();
+        self.keys.release_all(now, out);
+    }
+
     /// A finger holds `mapping` down.
     fn fingers_hold(&self, mapping: &str) -> bool {
         self.fingers.iter().any(|f| f.role.holds() == Some(mapping))
@@ -288,25 +354,7 @@ impl Touch {
 
     fn land(&mut self, layout: &Layout, at: [f64; 2], now: Instant, out: &mut Vec<Input>) -> Role {
         let px = [at[0] as f32, at[1] as f32];
-        if self.context.mode != Mode::Playing {
-            if self.context.mode == Mode::Menu && layout.on(Button::Back, px) {
-                out.push(Input::Back);
-                return Role::Spent;
-            }
-            if self
-                .fingers
-                .iter()
-                .any(|f| matches!(f.role, Role::Pointer { .. }))
-            {
-                return Role::Spent;
-            }
-            out.push(Input::Pointer {
-                at,
-                pressed: Some(true),
-            });
-            return Role::Pointer { at };
-        }
-        for button in [Button::Jump, Button::Inventory, Button::Pause] {
+        for button in [Button::Jump, Button::Inventory, Button::Pause, Button::Chat] {
             if layout.on(button, px) {
                 let role = Role::Button(button);
                 match role.holds() {
@@ -385,10 +433,6 @@ impl Touch {
     ) {
         let px = [at[0] as f32, at[1] as f32];
         match role {
-            Role::Pointer { at: last } => {
-                *last = at;
-                out.push(Input::Pointer { at, pressed: None });
-            }
             Role::Pad { cell } => {
                 // The middle stops the player but doesn't sneak under a sliding thumb.
                 let under = layout.cell_at(px).filter(|c| *c != Cell::Middle);
@@ -427,14 +471,13 @@ impl Touch {
                 }
             }
             Role::Hotbar => out.extend(layout.hotbar_slot(px).map(Input::Hotbar)),
-            Role::Button(_) | Role::Descend | Role::Spent => {}
+            Role::Menu(_) | Role::Button(_) | Role::Descend | Role::Spent => {}
         }
     }
 
     /// A finger leaves the screen where it was.
-    fn lift(&mut self, role: Role, at: [f64; 2], now: Instant, out: &mut Vec<Input>) {
+    fn lift(&mut self, role: Role, now: Instant, out: &mut Vec<Input>) {
         match role {
-            Role::Pointer { .. } => lift_pointer(at, out),
             // A tap clicks use or attack, which another finger may be holding down.
             Role::Look {
                 landed,
@@ -464,7 +507,7 @@ impl Touch {
     /// Let go of what a lifted finger held down, once no other finger holds it.
     fn release(&mut self, role: Role, now: Instant, out: &mut Vec<Input>) {
         match role {
-            Role::Pointer { at } => lift_pointer(at, out),
+            Role::Menu(gesture) => self.let_go(gesture, out),
             Role::Pad { .. } | Role::Stick { .. } => self.stop_moving(now, out),
             role => {
                 if let Some(mapping) = role.holds().filter(|m| !self.fingers_hold(m)) {
@@ -475,21 +518,46 @@ impl Touch {
     }
 }
 
-fn lift_pointer(at: [f64; 2], out: &mut Vec<Input>) {
-    out.push(Input::Pointer {
-        at,
-        pressed: Some(false),
-    });
-    out.push(Input::Pointer {
-        at: AWAY,
-        pressed: None,
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::keys::MIN_STATE;
     use super::*;
+
+    /// A finger with nothing of the game's under it, as in play.
+    trait Finger {
+        fn finger(
+            &mut self,
+            layout: &Layout,
+            id: u64,
+            phase: Phase,
+            at: [f64; 2],
+            now: Instant,
+        ) -> Vec<Input>;
+    }
+
+    impl Finger for Touch {
+        fn finger(
+            &mut self,
+            layout: &Layout,
+            id: u64,
+            phase: Phase,
+            at: [f64; 2],
+            now: Instant,
+        ) -> Vec<Input> {
+            let here = Here::default();
+            self.touch(
+                layout,
+                self.context,
+                TouchEvent {
+                    id,
+                    phase,
+                    at,
+                    here,
+                },
+                now,
+            )
+        }
+    }
 
     /// An iPhone in landscape: 3 pixels a point, GUI scale 5, 8-pixel art.
     fn layout() -> Layout {
@@ -523,35 +591,28 @@ mod tests {
         let (mut touch, layout) = (Touch::default(), layout());
         let now = Instant::now();
         assert_eq!(
-            touch.touch(&layout, 1, Phase::Start, [100.0, 200.0], now),
-            [Input::Pointer {
-                at: [100.0, 200.0],
-                pressed: Some(true)
-            }]
+            touch.finger(&layout, 1, Phase::Start, [100.0, 200.0], now),
+            [Input::Pointer([100.0, 200.0])]
         );
         assert!(
             touch
-                .touch(&layout, 2, Phase::Start, [900.0, 200.0], now)
+                .finger(&layout, 2, Phase::Start, [900.0, 200.0], now)
                 .is_empty()
         );
         assert_eq!(
-            touch.touch(&layout, 1, Phase::Move, [120.0, 210.0], now),
-            [Input::Pointer {
-                at: [120.0, 210.0],
-                pressed: None
-            }]
+            touch.finger(&layout, 1, Phase::Move, [120.0, 210.0], now),
+            [Input::Pointer([120.0, 210.0])]
         );
         assert_eq!(
-            touch.touch(&layout, 1, Phase::End, [120.0, 210.0], now),
+            touch.finger(&layout, 1, Phase::End, [120.0, 210.0], now),
             [
-                Input::Pointer {
-                    at: [120.0, 210.0],
-                    pressed: Some(false)
+                Input::Pointer([120.0, 210.0]),
+                Input::Press {
+                    button: MouseButton::Left,
+                    fresh: false
                 },
-                Input::Pointer {
-                    at: AWAY,
-                    pressed: None
-                }
+                Input::Release(MouseButton::Left),
+                Input::Pointer(AWAY)
             ]
         );
     }
@@ -562,17 +623,17 @@ mod tests {
         let now = Instant::now();
         let back = centre(layout.button(Button::Back));
         assert!(matches!(
-            touch.touch(&layout, 1, Phase::Start, back, now)[..],
-            [Input::Pointer { .. }]
+            touch.finger(&layout, 1, Phase::Start, back, now)[..],
+            [Input::Pointer(_)]
         ));
-        touch.touch(&layout, 1, Phase::End, back, now);
+        touch.finger(&layout, 1, Phase::End, back, now);
         let menu = Context {
             mode: Mode::Menu,
             ..Context::default()
         };
         touch.frame(menu, now);
         assert_eq!(
-            touch.touch(&layout, 2, Phase::Start, back, now),
+            touch.finger(&layout, 2, Phase::Start, back, now),
             [Input::Back]
         );
     }
@@ -583,25 +644,25 @@ mod tests {
         let on = |c| cell(&layout, c);
         assert!(
             touch
-                .touch(&layout, 1, Phase::Start, on(Cell::Forward), now)
+                .finger(&layout, 1, Phase::Start, on(Cell::Forward), now)
                 .is_empty()
         );
         assert_eq!(touch.move_vector(), Some([0.0, 1.0]));
-        touch.touch(&layout, 1, Phase::Move, on(Cell::ForwardLeft), now);
+        touch.finger(&layout, 1, Phase::Move, on(Cell::ForwardLeft), now);
         let [left, forward] = touch.move_vector().unwrap();
         assert!(left > 0.7 && forward > 0.7, "{left} {forward}");
-        touch.touch(&layout, 1, Phase::Move, on(Cell::Left), now);
+        touch.finger(&layout, 1, Phase::Move, on(Cell::Left), now);
         assert_eq!(touch.move_vector(), Some([1.0, 0.0]));
-        touch.touch(&layout, 1, Phase::Move, on(Cell::Right), now);
+        touch.finger(&layout, 1, Phase::Move, on(Cell::Right), now);
         assert_eq!(touch.move_vector(), Some([-1.0, 0.0]));
         // Over the middle the player stops, without sneaking.
         assert!(
             touch
-                .touch(&layout, 1, Phase::Move, on(Cell::Middle), now)
+                .finger(&layout, 1, Phase::Move, on(Cell::Middle), now)
                 .is_empty()
         );
         assert_eq!(touch.move_vector(), Some([0.0, 0.0]));
-        touch.touch(&layout, 1, Phase::End, on(Cell::Middle), now);
+        touch.finger(&layout, 1, Phase::End, on(Cell::Middle), now);
         assert_eq!(touch.move_vector(), None);
     }
 
@@ -613,35 +674,35 @@ mod tests {
         let forward = on(Cell::Forward);
         assert!(
             touch
-                .touch(&layout, 1, Phase::Start, forward, now)
+                .finger(&layout, 1, Phase::Start, forward, now)
                 .is_empty()
         );
         assert!(
             touch
-                .touch(&layout, 1, Phase::End, forward, ms(100))
+                .finger(&layout, 1, Phase::End, forward, ms(100))
                 .is_empty()
         );
         assert_eq!(
-            touch.touch(&layout, 2, Phase::Start, forward, ms(250)),
+            touch.finger(&layout, 2, Phase::Start, forward, ms(250)),
             [Input::Sprint(true)]
         );
         // Sliding to a forward diagonal keeps sprinting; off forward stops it.
         assert!(
             touch
-                .touch(&layout, 2, Phase::Move, on(Cell::ForwardRight), ms(300))
+                .finger(&layout, 2, Phase::Move, on(Cell::ForwardRight), ms(300))
                 .is_empty()
         );
         assert_eq!(
-            touch.touch(&layout, 2, Phase::Move, on(Cell::Right), ms(350)),
+            touch.finger(&layout, 2, Phase::Move, on(Cell::Right), ms(350)),
             [Input::Sprint(false)]
         );
-        touch.touch(&layout, 2, Phase::End, on(Cell::Right), ms(400));
+        touch.finger(&layout, 2, Phase::End, on(Cell::Right), ms(400));
         // Too slow a second tap only walks.
-        touch.touch(&layout, 3, Phase::Start, forward, ms(500));
-        touch.touch(&layout, 3, Phase::End, forward, ms(550));
+        touch.finger(&layout, 3, Phase::Start, forward, ms(500));
+        touch.finger(&layout, 3, Phase::End, forward, ms(550));
         assert!(
             touch
-                .touch(&layout, 4, Phase::Start, forward, ms(900))
+                .finger(&layout, 4, Phase::Start, forward, ms(900))
                 .is_empty()
         );
     }
@@ -651,20 +712,20 @@ mod tests {
         let (mut touch, layout, now) = playing(Movement::DPad);
         let middle = cell(&layout, Cell::Middle);
         assert_eq!(
-            touch.touch(&layout, 1, Phase::Start, middle, now),
+            touch.finger(&layout, 1, Phase::Start, middle, now),
             [Input::Sneak]
         );
-        assert!(touch.touch(&layout, 1, Phase::End, middle, now).is_empty());
+        assert!(touch.finger(&layout, 1, Phase::End, middle, now).is_empty());
         let flying = Context {
             flying: true,
             ..touch.context
         };
         touch.frame(flying, now);
         assert_eq!(
-            touch.touch(&layout, 2, Phase::Start, middle, now),
+            touch.finger(&layout, 2, Phase::Start, middle, now),
             [Input::Mapping("key.sneak", true)]
         );
-        assert!(touch.touch(&layout, 2, Phase::End, middle, now).is_empty());
+        assert!(touch.finger(&layout, 2, Phase::End, middle, now).is_empty());
         assert_eq!(
             touch.frame(flying, now + MIN_STATE),
             [Input::Mapping("key.sneak", false)]
@@ -674,12 +735,12 @@ mod tests {
     #[test]
     fn a_tap_on_the_view_taps_and_a_held_finger_mines_until_lifted() {
         let (mut touch, layout, now) = playing(Movement::DPad);
-        assert!(touch.touch(&layout, 1, Phase::Start, VIEW, now).is_empty());
+        assert!(touch.finger(&layout, 1, Phase::Start, VIEW, now).is_empty());
         assert_eq!(
-            touch.touch(&layout, 1, Phase::End, VIEW, now + HOLD / 2),
+            touch.finger(&layout, 1, Phase::End, VIEW, now + HOLD / 2),
             [Input::Tap]
         );
-        touch.touch(&layout, 2, Phase::Start, VIEW, now);
+        touch.finger(&layout, 2, Phase::Start, VIEW, now);
         let context = touch.context;
         assert!(touch.frame(context, now + HOLD / 2).is_empty());
         assert_eq!(
@@ -687,7 +748,7 @@ mod tests {
             [Input::Mapping("key.attack", true)]
         );
         assert_eq!(
-            touch.touch(&layout, 2, Phase::End, VIEW, now + HOLD * 3),
+            touch.finger(&layout, 2, Phase::End, VIEW, now + HOLD * 3),
             [Input::Mapping("key.attack", false)]
         );
     }
@@ -700,13 +761,13 @@ mod tests {
             ..touch.context
         };
         touch.frame(food, now);
-        touch.touch(&layout, 1, Phase::Start, VIEW, now);
+        touch.finger(&layout, 1, Phase::Start, VIEW, now);
         assert_eq!(
             touch.frame(food, now + HOLD),
             [Input::Mapping("key.use", true)]
         );
         assert_eq!(
-            touch.touch(&layout, 1, Phase::End, VIEW, now + HOLD * 4),
+            touch.finger(&layout, 1, Phase::End, VIEW, now + HOLD * 4),
             [Input::Mapping("key.use", false)]
         );
     }
@@ -714,13 +775,17 @@ mod tests {
     #[test]
     fn a_cancelled_touch_lets_go_without_tapping() {
         let (mut touch, layout, now) = playing(Movement::DPad);
-        touch.touch(&layout, 1, Phase::Start, VIEW, now);
-        assert!(touch.touch(&layout, 1, Phase::Cancel, VIEW, now).is_empty());
-        touch.touch(&layout, 2, Phase::Start, VIEW, now);
+        touch.finger(&layout, 1, Phase::Start, VIEW, now);
+        assert!(
+            touch
+                .finger(&layout, 1, Phase::Cancel, VIEW, now)
+                .is_empty()
+        );
+        touch.finger(&layout, 2, Phase::Start, VIEW, now);
         let context = touch.context;
         touch.frame(context, now + HOLD);
         assert_eq!(
-            touch.touch(&layout, 2, Phase::Cancel, VIEW, now + HOLD + MIN_STATE),
+            touch.finger(&layout, 2, Phase::Cancel, VIEW, now + HOLD + MIN_STATE),
             [Input::Mapping("key.attack", false)]
         );
     }
@@ -728,16 +793,16 @@ mod tests {
     #[test]
     fn dragging_the_view_turns_it_and_neither_taps_nor_mines() {
         let (mut touch, layout, now) = playing(Movement::DPad);
-        touch.touch(&layout, 1, Phase::Start, VIEW, now);
+        touch.finger(&layout, 1, Phase::Start, VIEW, now);
         assert_eq!(
-            touch.touch(&layout, 1, Phase::Move, [2100.0, 460.0], now),
+            touch.finger(&layout, 1, Phase::Move, [2100.0, 460.0], now),
             [Input::Look([50.0, -20.0])]
         );
         let context = touch.context;
         assert!(touch.frame(context, now + HOLD * 2).is_empty());
         assert!(
             touch
-                .touch(&layout, 1, Phase::End, [2100.0, 460.0], now + HOLD * 2)
+                .finger(&layout, 1, Phase::End, [2100.0, 460.0], now + HOLD * 2)
                 .is_empty()
         );
     }
@@ -748,23 +813,23 @@ mod tests {
         let reach = f64::from(layout.reach());
         let landed = [300.0, 800.0];
         let at = |dx: f64, dy: f64| [landed[0] + dx * reach, landed[1] - dy * reach];
-        touch.touch(&layout, 1, Phase::Start, landed, now);
+        touch.finger(&layout, 1, Phase::Start, landed, now);
         assert_eq!(touch.move_vector(), Some([0.0, 0.0]));
-        touch.touch(&layout, 1, Phase::Move, at(0.1, 0.0), now);
+        touch.finger(&layout, 1, Phase::Move, at(0.1, 0.0), now);
         assert_eq!(touch.move_vector(), Some([0.0, 0.0]));
         // Pushed right: the player goes right, which the game counts as negative left.
-        touch.touch(&layout, 1, Phase::Move, at(1.0, 0.0), now);
+        touch.finger(&layout, 1, Phase::Move, at(1.0, 0.0), now);
         let [left, forward] = touch.move_vector().unwrap();
         assert!(
             (left + 1.0).abs() < 1e-3 && forward.abs() < 1e-3,
             "{left} {forward}"
         );
         assert_eq!(
-            touch.touch(&layout, 1, Phase::Move, at(0.0, 3.0), now),
+            touch.finger(&layout, 1, Phase::Move, at(0.0, 3.0), now),
             [Input::Sprint(true)]
         );
         assert_eq!(
-            touch.touch(&layout, 1, Phase::End, at(0.0, 3.0), now),
+            touch.finger(&layout, 1, Phase::End, at(0.0, 3.0), now),
             [Input::Sprint(false)]
         );
         assert_eq!(touch.move_vector(), None);
@@ -773,10 +838,10 @@ mod tests {
     #[test]
     fn a_second_thumb_on_the_left_turns_the_view_and_leaves_the_joystick_alone() {
         let (mut touch, layout, now) = playing(Movement::Joystick);
-        touch.touch(&layout, 1, Phase::Start, [300.0, 800.0], now);
-        touch.touch(&layout, 2, Phase::Start, [200.0, 300.0], now);
+        touch.finger(&layout, 1, Phase::Start, [300.0, 800.0], now);
+        touch.finger(&layout, 2, Phase::Start, [200.0, 300.0], now);
         assert_eq!(
-            touch.touch(&layout, 2, Phase::Move, [230.0, 300.0], now),
+            touch.finger(&layout, 2, Phase::Move, [230.0, 300.0], now),
             [Input::Look([15.0, 0.0])]
         );
         assert!(touch.move_vector().is_some());
@@ -788,13 +853,17 @@ mod tests {
         let jump = centre(layout.button(Button::Jump));
         let ms = |n: u64| now + Duration::from_millis(n);
         assert_eq!(
-            touch.touch(&layout, 1, Phase::Start, jump, now),
+            touch.finger(&layout, 1, Phase::Start, jump, now),
             [Input::Mapping("key.jump", true)]
         );
-        assert!(touch.touch(&layout, 1, Phase::End, jump, ms(40)).is_empty());
         assert!(
             touch
-                .touch(&layout, 2, Phase::Start, jump, ms(55))
+                .finger(&layout, 1, Phase::End, jump, ms(40))
+                .is_empty()
+        );
+        assert!(
+            touch
+                .finger(&layout, 2, Phase::Start, jump, ms(55))
                 .is_empty()
         );
         let context = touch.context;
@@ -809,35 +878,51 @@ mod tests {
         );
         let pause = centre(layout.button(Button::Pause));
         assert_eq!(
-            touch.touch(&layout, 3, Phase::Start, pause, ms(150)),
+            touch.finger(&layout, 3, Phase::Start, pause, ms(150)),
             [Input::Back]
+        );
+    }
+
+    #[test]
+    fn the_chat_button_presses_key_chat() {
+        let (mut touch, layout, now) = playing(Movement::DPad);
+        let chat = centre(layout.button(Button::Chat));
+        assert_eq!(
+            touch.finger(&layout, 1, Phase::Start, chat, now),
+            [Input::Mapping("key.chat", true)]
+        );
+        assert!(touch.finger(&layout, 1, Phase::End, chat, now).is_empty());
+        let context = touch.context;
+        assert_eq!(
+            touch.frame(context, now + MIN_STATE),
+            [Input::Mapping("key.chat", false)]
         );
     }
 
     #[test]
     fn a_mapping_two_fingers_hold_is_released_by_the_last_one() {
         let (mut touch, layout, now) = playing(Movement::DPad);
-        touch.touch(&layout, 3, Phase::Start, VIEW, now);
-        touch.touch(&layout, 4, Phase::Start, [2200.0, 500.0], now);
+        touch.finger(&layout, 3, Phase::Start, VIEW, now);
+        touch.finger(&layout, 4, Phase::Start, [2200.0, 500.0], now);
         let context = touch.context;
         assert_eq!(
             touch.frame(context, now + HOLD),
             [Input::Mapping("key.attack", true)]
         );
         // A tap with a third finger neither taps nor lets go of the attack.
-        touch.touch(&layout, 5, Phase::Start, [2400.0, 500.0], now + HOLD);
+        touch.finger(&layout, 5, Phase::Start, [2400.0, 500.0], now + HOLD);
         assert!(
             touch
-                .touch(&layout, 5, Phase::End, [2400.0, 500.0], now + HOLD)
+                .finger(&layout, 5, Phase::End, [2400.0, 500.0], now + HOLD)
                 .is_empty()
         );
         assert!(
             touch
-                .touch(&layout, 3, Phase::End, VIEW, now + HOLD)
+                .finger(&layout, 3, Phase::End, VIEW, now + HOLD)
                 .is_empty()
         );
         assert_eq!(
-            touch.touch(&layout, 4, Phase::End, VIEW, now + HOLD + MIN_STATE),
+            touch.finger(&layout, 4, Phase::End, VIEW, now + HOLD + MIN_STATE),
             [Input::Mapping("key.attack", false)]
         );
     }
@@ -848,11 +933,11 @@ mod tests {
         // GUI 525 x 242 at scale 5: the hotbar spans x 171..353 above y 220.
         let slot = |i: f64| [(171.0 + 1.0 + 20.0 * i + 10.0) * 5.0, 230.0 * 5.0];
         assert_eq!(
-            touch.touch(&layout, 1, Phase::Start, slot(0.0), now),
+            touch.finger(&layout, 1, Phase::Start, slot(0.0), now),
             [Input::Hotbar(0)]
         );
         assert_eq!(
-            touch.touch(&layout, 1, Phase::Move, slot(8.0), now),
+            touch.finger(&layout, 1, Phase::Move, slot(8.0), now),
             [Input::Hotbar(8)]
         );
     }
@@ -861,11 +946,11 @@ mod tests {
     fn leaving_play_lets_go_of_everything_held() {
         let (mut touch, layout, now) = playing(Movement::DPad);
         let jump = centre(layout.button(Button::Jump));
-        touch.touch(&layout, 1, Phase::Start, jump, now);
-        touch.touch(&layout, 2, Phase::Start, VIEW, now);
+        touch.finger(&layout, 1, Phase::Start, jump, now);
+        touch.finger(&layout, 2, Phase::Start, VIEW, now);
         let context = touch.context;
         touch.frame(context, now + HOLD);
-        touch.touch(&layout, 3, Phase::Start, cell(&layout, Cell::Forward), now);
+        touch.finger(&layout, 3, Phase::Start, cell(&layout, Cell::Forward), now);
         let menu = Context {
             mode: Mode::Menu,
             ..context
@@ -878,6 +963,6 @@ mod tests {
             ]
         );
         assert_eq!(touch.move_vector(), None);
-        assert!(touch.touch(&layout, 2, Phase::End, VIEW, now).is_empty());
+        assert!(touch.finger(&layout, 2, Phase::End, VIEW, now).is_empty());
     }
 }

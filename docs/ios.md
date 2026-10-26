@@ -125,7 +125,13 @@ once a finger first touches the screen.
 
 | Where | What it does |
 | --- | --- |
-| Title screen and menus | A finger is the mouse pointer: tap a button, drag a slider |
+| Title screen and menus | A finger is the mouse. A tap clicks where the finger lifts. A drag presses where the finger landed and follows it, so sliders drag. A touch the system takes clicks nothing |
+| Lists | Drag a list to scroll it: worlds, servers, options, chat, a villager's trades, the stonecutter, the loom and creative's items. A scrollbar still drags, and a slider in a list moves when you drag it sideways |
+| Inventories: picking up and placing | Tap a stack to pick it up, and tap a slot to put it down. The stack you hold stays where your finger lifted. Double tap a stack to gather all of its kind |
+| Inventories: dragging | Drag a stack from its slot to another to move it. On a different item they swap. Lifted on a gap, it goes back. Holding a stack, drag across slots to spread it evenly. Drag a stack out of the panel to throw it; a tap out there throws nothing |
+| Inventories: long press | A ring fills under the finger for half a second, then the long press is the mouse's right button. On a stack, it takes half. With a stack in hand, it places one; drag on to place one on each slot you cross. Outside the panel, it drops one. On the crafting result, it crafts once. On a creative item, it gives a full stack. On a recipe with alternatives, it shows them |
+| Shift (bottom left, in inventories) | The keyboard's Shift, as on the iPhone keyboard. Tap it to shift the next tap, double tap it to lock it (underlined), tap again to unlock, or hold it while you tap. Shift and a tap moves a stack across (into a chest and back), and on the crafting result crafts all it can. Creative's trash empties the inventory only while a finger holds Shift |
+| Tooltips | Rest a finger on a stack or a button: its tooltip shows above the finger, out from under it |
 | Back (top left, in a world's menus) | Escape: closes the inventory and other screens, resumes from pause |
 | D-pad (bottom left) | Forward, back and the sides; the forward diagonals show while forward is held, and a thumb slides between arrows. A double tap on forward sprints. The middle toggles sneaking, and goes down while flying |
 | Jump (bottom right) | Jumps; a double tap flies in creative, and holding it goes up while flying |
@@ -133,6 +139,7 @@ once a finger first touches the screen.
 | Hotbar | Tap or slide to select a slot |
 | ••• beside the hotbar | The inventory |
 | II (top right) | Pause |
+| Speech bubble (left of II) | Opens chat |
 
 Options > Horizon Settings > Controller Settings > **Touch Movement** swaps the D-pad for a
 joystick that appears where the left thumb lands and sprints pushed all the way forward. Controls'

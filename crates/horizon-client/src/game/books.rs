@@ -128,6 +128,7 @@ impl Game<'_> {
         }
     }
     fn open_book(&mut self, screen: BookScreen) {
+        self.screens_opened += 1;
         self.book = Some(screen);
         self.keys.clear();
         self.right = false;

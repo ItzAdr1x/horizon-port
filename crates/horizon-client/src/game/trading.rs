@@ -378,8 +378,7 @@ impl Game<'_> {
         let mut s = Station::new_kind(Kind::Merchant, [0, 0, 0]);
         s.merchant = Some(Box::new(state));
         self.station = Some(s);
-        self.screen = super::Screen::Inventory;
-        self.capture(false);
+        self.open_menu_screen();
         self.right = false;
     }
     /// The trading mob's random before a menu click (it ticks meanwhile).
@@ -666,6 +665,11 @@ impl Game<'_> {
                 ox + SHIFT + 94.0,
                 oy + 18.0 + y as f32,
             );
+            horizon_client::widgets::list(horizon_client::widgets::List {
+                rect: [ox + SHIFT + 5.0, oy + 18.0, 88.0, 140.0],
+                bar: Some([ox + SHIFT + 94.0, oy + 18.0, 6.0, 139.0]),
+                line: 20.0,
+            });
         } else {
             batch.sprite(
                 atlas,

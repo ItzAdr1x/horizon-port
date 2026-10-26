@@ -4936,8 +4936,7 @@ impl Game<'_> {
             self.world.block_entities.insert(key, entity);
             self.container = Some(key);
         }
-        self.screen = Screen::Inventory;
-        self.capture(false);
+        self.open_menu_screen();
     }
     /// `ClientPacketListener.handleMountScreenOpen`: a horse's or llama's
     /// inventory; for another entity the window is closed again.

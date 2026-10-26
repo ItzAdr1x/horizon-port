@@ -5,6 +5,7 @@
 use super::Game;
 
 mod crafter;
+pub(super) use crafter::RESULT_SLOT as CRAFTER_RESULT;
 use horizon_client::{
     Result,
     containers::{BlockEntity, HOPPER_SLOTS},

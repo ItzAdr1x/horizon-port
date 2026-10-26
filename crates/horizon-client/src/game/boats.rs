@@ -790,8 +790,7 @@ impl Game<'_> {
                 horizon_client::containers::BlockEntity::Chest(b.items.clone()),
             );
             self.container = Some(key);
-            self.screen = super::Screen::Inventory;
-            self.capture(false);
+            self.open_menu_screen();
             self.right = false;
             return true;
         }

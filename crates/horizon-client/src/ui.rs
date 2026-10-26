@@ -552,7 +552,10 @@ impl Scroll {
     }
 }
 
-/// Vertical scroll bar (AbstractScrollArea): background and scroller sprites.
+/// Vertical scroll bar (AbstractScrollArea): background and scroller sprites. A list with
+/// something to scroll registers here (`widgets::list`) across the screen's width, `line` its
+/// wheel's pixels per line, so a finger dragging its rows scrolls it.
+#[allow(clippy::too_many_arguments)]
 pub fn scrollbar(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
@@ -561,11 +564,17 @@ pub fn scrollbar(
     bottom: f32,
     content: f32,
     scroll: f32,
+    line: f32,
 ) {
     let Some((y, bar)) = scrollbar_thumb(top, bottom, content, scroll) else {
         return;
     };
     let height = bottom - top;
+    crate::widgets::list(crate::widgets::List {
+        rect: [0.0, top, batch.width, height],
+        bar: Some([x, top, 6.0, height]),
+        line,
+    });
     nine_slice(
         batch,
         atlas,
@@ -588,6 +597,30 @@ pub fn scrollbar(
     );
 }
 
+thread_local! {
+    /// GUI pixels between the pointer and a tooltip's bottom while a finger is the pointer; 0 for
+    /// a mouse.
+    static TOOLTIP_LIFT: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
+
+/// Clear tooltips of a finger this many GUI pixels tall from now on (0: as a mouse has them). The
+/// game sets it once a frame from the touch controls.
+pub fn set_tooltip_lift(gui_px: f32) {
+    TOOLTIP_LIFT.set(gui_px);
+}
+
+/// The top of a tooltip's text for a pointer at height `y`, its drawn box reaching `below` pixels
+/// under that top: 12 pixels above the pointer (`DefaultTooltipPositioner`), or with the whole box
+/// above a finger that is the pointer.
+pub fn tooltip_top(y: f32, below: f32) -> f32 {
+    let lift = TOOLTIP_LIFT.get();
+    if lift > 0.0 {
+        y - lift - below
+    } else {
+        y - 12.0
+    }
+}
+
 /// Screen tooltip (DefaultTooltipPositioner + TooltipRenderUtil): the
 /// background and frame sprites around the lines, beside the cursor.
 pub fn tooltip(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], cursor: (f32, f32)) {
@@ -604,7 +637,8 @@ pub fn tooltip(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], cursor: (
         10.0 * lines.len() as f32
     };
     let mut x = cursor.0 + 12.0;
-    let mut y = cursor.1 - 12.0;
+    // The background sprite's box ends 4 pixels below the text.
+    let mut y = tooltip_top(cursor.1, h + 4.0);
     if x + w > batch.width {
         x = (cursor.0 - 24.0 - w).max(4.0);
     }
@@ -1186,6 +1220,16 @@ impl EditBox {
 mod tests {
     use super::*;
 
+    #[test]
+    fn tooltips_rise_wholly_above_a_finger() {
+        // A box reaching 30 pixels below its text's top.
+        assert_eq!(tooltip_top(100.0, 30.0), 88.0);
+        set_tooltip_lift(20.0);
+        assert_eq!(tooltip_top(100.0, 30.0) + 30.0, 100.0 - 20.0);
+        set_tooltip_lift(0.0);
+        assert_eq!(tooltip_top(100.0, 30.0), 88.0);
+    }
+
     /// The quads' destination rectangles and their UVs.
     fn quads(batch: &HudBatch) -> Vec<([f32; 4], [f32; 4])> {
         batch
@@ -1450,5 +1494,22 @@ mod tests {
         e.insert_text("é§x");
         assert_eq!(e.value, "éx worl");
         assert_eq!(e.cursor, 2);
+    }
+
+    #[test]
+    fn a_scrollbar_registers_its_list_only_with_something_to_scroll() {
+        let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let mut batch = HudBatch::new([854, 480]);
+        let frame = |n| crate::widgets::end_frame(n);
+        frame(1000);
+        scrollbar(&mut batch, &atlas, 300.0, 30.0, 130.0, 90.0, 0.0, 18.0);
+        frame(1001);
+        assert_eq!(crate::widgets::list_at(100.0, 80.0), None);
+        scrollbar(&mut batch, &atlas, 300.0, 30.0, 130.0, 400.0, 0.0, 18.0);
+        frame(1002);
+        let list = crate::widgets::list_at(100.0, 80.0).expect("a list to scroll");
+        assert_eq!(list.line, 18.0);
+        assert_eq!(list.bar, Some([300.0, 30.0, 6.0, 100.0]));
+        assert_eq!(crate::widgets::list_at(100.0, 140.0), None);
     }
 }

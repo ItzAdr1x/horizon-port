@@ -966,6 +966,7 @@ impl Title {
                     bottom,
                     content,
                     scroll.amount,
+                    ROW_HEIGHT / 2.0,
                 );
             }
             Mode::Create {

@@ -2,9 +2,10 @@
 //! pixel `Layout::unit` physical pixels wide, drawn into the HUD batch.
 
 use super::layout::{Button, Cell, KNOB, Layout, Rect};
+use super::menu::{Gesture, Hold, Latch, MENU_HOLD, hold};
 use super::{HOLD, Mode, Movement, Role, Touch};
 use crate::hud::{HudAtlas, HudBatch, rgba};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 type Icon = &'static [&'static str];
 
@@ -51,7 +52,63 @@ const SNEAK: Icon = &[
     "##########",
 ];
 const DOTS: Icon = &["##..##..##", "##..##..##"];
+/// The iPhone keyboard's shift key: hollow, filled for the next click, underlined when locked.
+const SHIFT: Icon = &[
+    "....##....",
+    "...#..#...",
+    "..#....#..",
+    ".#......#.",
+    "###....###",
+    "..#....#..",
+    "..#....#..",
+    "..######..",
+];
+const SHIFT_ON: Icon = &[
+    "....##....",
+    "...####...",
+    "..######..",
+    ".########.",
+    "##########",
+    "..######..",
+    "..######..",
+    "..######..",
+];
+const SHIFT_LOCKED: Icon = &[
+    "....##....",
+    "...####...",
+    "..######..",
+    ".########.",
+    "##########",
+    "..######..",
+    "..######..",
+    "..######..",
+    "..........",
+    "..######..",
+];
+/// An arrow down to the ground: lifting here throws the stack.
+const DROP: Icon = &[
+    "...####...",
+    "...####...",
+    "...####...",
+    "##########",
+    ".########.",
+    "..######..",
+    "...####...",
+    "....##....",
+    "..........",
+    "##########",
+];
 const PAUSE: Icon = &["##..##", "##..##", "##..##", "##..##", "##..##", "##..##"];
+/// A speech bubble.
+const CHAT: Icon = &[
+    ".#########.",
+    "###########",
+    "##.##.##.##",
+    "###########",
+    ".#########.",
+    "..##.......",
+    "..#........",
+];
 
 /// Which way an icon points: as drawn, or turned.
 #[derive(Clone, Copy)]
@@ -121,6 +178,21 @@ impl Pen<'_> {
         self.plate(r, pressed);
         self.icon(r, icon, turn);
     }
+    /// A ring of dots around a finger at `at`, filling as it is held `held` of `hold`.
+    fn ring(&mut self, at: [f64; 2], held: Duration, hold: Duration) {
+        const DOTS: u32 = 12;
+        let u = self.layout.unit;
+        let lit = (held.as_secs_f32() / hold.as_secs_f32() * DOTS as f32) as u32;
+        for i in 0..DOTS {
+            let angle = i as f32 / DOTS as f32 * std::f32::consts::TAU;
+            let (x, y) = (
+                at[0] as f32 + angle.sin() * 12.0 * u,
+                at[1] as f32 - angle.cos() * 12.0 * u,
+            );
+            let color = if i < lit { ICON } else { PLATE };
+            self.fill([x - u, y - u, 2.0 * u, 2.0 * u], color);
+        }
+    }
     /// A disc of `radius` art pixels around `centre`, one row of pixels at a time.
     fn disc(&mut self, centre: [f32; 2], radius: f32, color: u32) {
         let u = self.layout.unit;
@@ -156,8 +228,20 @@ impl Touch {
             layout,
         };
         match self.context.mode {
-            Mode::Title => {}
-            Mode::Menu => pen.button(layout.button(Button::Back), false, ARROW, Turn::Left),
+            Mode::Title => self.draw_menu(&mut pen, now),
+            Mode::Menu => {
+                pen.button(layout.button(Button::Back), false, ARROW, Turn::Left);
+                if self.context.slots {
+                    let shift = self.menus.shift;
+                    let icon = match shift.latch {
+                        Latch::Locked => SHIFT_LOCKED,
+                        _ if shift.active() => SHIFT_ON,
+                        _ => SHIFT,
+                    };
+                    pen.button(layout.button(Button::Shift), shift.active(), icon, Turn::Up);
+                }
+                self.draw_menu(&mut pen, now);
+            }
             Mode::Playing => {
                 match self.context.movement {
                     Movement::DPad => self.draw_dpad(&mut pen, sneaking),
@@ -180,6 +264,12 @@ impl Touch {
                     layout.button(Button::Pause),
                     held(Button::Pause),
                     PAUSE,
+                    Turn::Up,
+                );
+                pen.button(
+                    layout.button(Button::Chat),
+                    held(Button::Chat),
+                    CHAT,
                     Turn::Up,
                 );
                 self.draw_holds(&mut pen, now);
@@ -236,31 +326,42 @@ impl Touch {
         pen.disc(knob, KNOB / 2.0 - 1.0, lit);
     }
 
+    /// The menu fingers' marks: the ring filling under a finger whose hold will do something,
+    /// and the drop hint above a finger that would throw a stack.
+    fn draw_menu(&self, pen: &mut Pen<'_>, now: Instant) {
+        for finger in &self.fingers {
+            match finger.role {
+                Role::Menu(Gesture::Pending {
+                    landed,
+                    from,
+                    here,
+                    held: false,
+                }) if hold(&here) != Hold::Nothing => {
+                    pen.ring(from, now.duration_since(landed), MENU_HOLD);
+                }
+                Role::Menu(Gesture::Pressing {
+                    outside: Some(at), ..
+                }) => {
+                    let hint = pen.layout.above([at[0] as f32, at[1] as f32]);
+                    pen.button(hint, false, DROP, Turn::Up);
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// A ring of dots filling around each finger held still on the view, until it mines or uses.
     fn draw_holds(&self, pen: &mut Pen<'_>, now: Instant) {
-        const DOTS: u32 = 12;
-        let u = pen.layout.unit;
         for finger in &self.fingers {
-            let Role::Look {
+            if let Role::Look {
                 landed,
                 last,
                 still: true,
                 holding: None,
                 ..
             } = finger.role
-            else {
-                continue;
-            };
-            let progress = now.duration_since(landed).as_secs_f32() / HOLD.as_secs_f32();
-            let lit = (progress * DOTS as f32) as u32;
-            for i in 0..DOTS {
-                let angle = i as f32 / DOTS as f32 * std::f32::consts::TAU;
-                let (x, y) = (
-                    last[0] as f32 + angle.sin() * 12.0 * u,
-                    last[1] as f32 - angle.cos() * 12.0 * u,
-                );
-                let color = if i < lit { ICON } else { PLATE };
-                pen.fill([x - u, y - u, 2.0 * u, 2.0 * u], color);
+            {
+                pen.ring(last, now.duration_since(landed), HOLD);
             }
         }
     }
