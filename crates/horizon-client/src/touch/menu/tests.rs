@@ -767,6 +767,24 @@ fn a_long_press_beyond_the_panel_cancelled_or_left_behind_drops_nothing() {
 }
 
 #[test]
+fn an_armed_drop_whose_hand_runs_out_throws_nothing() {
+    let outside = spot(Spot::Outside);
+    let (mut touch, layout, now, _) = long_press(holding(), outside);
+    hand(&mut touch, false, now);
+    assert_eq!(
+        drop_hint(&touch),
+        None,
+        "no hint for a throw that cannot come"
+    );
+    hand(&mut touch, true, now);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, A, outside), now),
+        [Input::Pointer(A), Input::Pointer(AWAY)],
+        "a stack back in hand is not the one the hold armed for"
+    );
+}
+
+#[test]
 fn a_long_press_beyond_the_panel_lifted_back_on_it_clicks_nothing() {
     let another_item = slot(3);
     let result = slot_of(200, true, SlotKind::Result);
@@ -883,7 +901,7 @@ fn a_long_press_on_a_plain_button_keeps_hovering_and_still_taps() {
 #[test]
 fn hold_decides_from_where_it_landed() {
     let hold = |here: &Here, carrying| hold(here, carrying, false);
-    assert_eq!(hold(&slot(3), false), Hold::Press(Press::Split));
+    assert_eq!(hold(&slot(3), false), Hold::Split);
     assert_eq!(hold(&empty(3), false), Hold::Nothing);
     assert_eq!(hold(&empty(3), true), Hold::Paint(3));
     assert_eq!(hold(&slot(3), true), Hold::Paint(3));

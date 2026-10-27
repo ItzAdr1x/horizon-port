@@ -392,8 +392,9 @@ impl Press {
 /// everywhere, but a stack in hand goes on a slot one item at a time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Hold {
-    /// The button goes down, and comes up where the finger lifts.
-    Press(Press),
+    /// The right button goes down on a stack under an empty hand (half of it taken), and comes
+    /// up where the finger lifts.
+    Split,
     /// A click at once.
     Click(MouseButton),
     /// One item from the hand on this slot, then more (`Gesture::Painting`).
@@ -418,7 +419,7 @@ pub(super) fn hold(landed: &Here, carrying: bool, shifted: bool) -> Hold {
         },
         Spot::Outside if carrying => Hold::Drop,
         Spot::Slot(s) if s.filled => match s.kind {
-            SlotKind::Normal => Hold::Press(Press::Split),
+            SlotKind::Normal => Hold::Split,
             // Vanilla's right click on the result takes one craft, as a left one does.
             SlotKind::Result => Hold::Click(MouseButton::Right),
             // The pick block button: a full stack of the copy.
@@ -436,7 +437,7 @@ pub(super) fn hold_rings(landed: &Here, carrying: bool, shifted: bool) -> bool {
     match hold(landed, carrying, shifted) {
         Hold::Nothing | Hold::Done => false,
         Hold::Paint(_) => matches!(landed.spot, Spot::Slot(s) if s.takes_one),
-        Hold::Press(_) | Hold::Click(_) | Hold::Drop => true,
+        Hold::Split | Hold::Click(_) | Hold::Drop => true,
     }
 }
 
@@ -686,6 +687,7 @@ impl Touch {
             Gesture::Pressing { press, outside, .. } => {
                 *outside = (press.throws() && here.spot == Spot::Outside).then_some(at);
             }
+            Gesture::Dropping { .. } if !self.context.carrying => *gesture = Gesture::Done,
             Gesture::Dropping { outside } => *outside = (here.spot == Spot::Outside).then_some(at),
             Gesture::Painting(_) if self.paint_stops() => *gesture = Gesture::Done,
             Gesture::Painting(paint) => paint.slide(finger, at, &here, layout, now, out),
@@ -828,6 +830,11 @@ impl Touch {
                 }
                 continue;
             }
+            // An armed drop whose hand ran out throws nothing, and stops showing that it would.
+            if matches!(gesture, Gesture::Dropping { .. }) && !carrying {
+                *gesture = Gesture::Done;
+                continue;
+            }
             let Gesture::Pending {
                 landed,
                 from,
@@ -850,15 +857,14 @@ impl Touch {
                         outside: Some(from),
                     }
                 }
-                Hold::Press(press) => {
+                Hold::Split => {
                     let shifted = self.menus.shift.take(true);
                     out.push(Input::Pointer(from));
-                    press_down(out, press.button(), shifted, true);
-                    let outside = press.throws() && here.spot == Spot::Outside;
+                    press_down(out, MouseButton::Right, shifted, true);
                     *gesture = Gesture::Pressing {
-                        press,
+                        press: Press::Split,
                         shifted,
-                        outside: outside.then_some(from),
+                        outside: None,
                     };
                 }
                 Hold::Click(button) => {
