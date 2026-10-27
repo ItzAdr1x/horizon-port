@@ -54,7 +54,8 @@ pub struct SlotSpot {
     pub filled: bool,
     pub kind: SlotKind,
     /// With a stack in hand, the right click here would put exactly one item in, as the game's
-    /// menu says; false with an empty hand.
+    /// menu says; false with an empty hand. Told only with the landing event, whose hold ring
+    /// reads it: false on later ones.
     pub takes_one: bool,
 }
 

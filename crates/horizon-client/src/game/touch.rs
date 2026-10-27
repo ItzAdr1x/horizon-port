@@ -128,7 +128,8 @@ impl Game<'_> {
             return;
         };
         let here = if self.pad_in_menu() {
-            self.touch_here([touch.location.x, touch.location.y])
+            let landing = touch.phase == TouchPhase::Started;
+            self.touch_here([touch.location.x, touch.location.y], landing)
         } else {
             Here::default()
         };
@@ -140,15 +141,16 @@ impl Game<'_> {
     }
 
     /// What lies under a finger at `at` (physical pixels) on the open menu. It hit-tests the
-    /// point, not `self.cursor`, which hasn't moved there yet.
-    fn touch_here(&mut self, at: [f64; 2]) -> Here {
+    /// point, not `self.cursor`, which hasn't moved there yet. `landing`: the finger's first
+    /// event, the one that decides its hold.
+    fn touch_here(&mut self, at: [f64; 2], landing: bool) -> Here {
         let Some(batch) = self.gui_scale() else {
             return Here::default();
         };
         let p = (at[0] as f32 / batch.scale, at[1] as f32 / batch.scale);
         let mut here = widget_here(p, batch.scale);
         if self.inventory_open()
-            && let Some(spot) = self.inventory_spot(&batch, p)
+            && let Some(spot) = self.inventory_spot(&batch, p, landing)
         {
             here.spot = spot;
         }
@@ -157,7 +159,9 @@ impl Game<'_> {
 
     /// The first that claims the point on an inventory: creative's tabs (beyond the panel, but
     /// theirs), trash and scrollbar, then beyond the panel (as `Target::of` has it), a slot.
-    fn inventory_spot(&mut self, batch: &HudBatch, p: (f32, f32)) -> Option<Spot> {
+    /// The menu's dry run for `takes_one` runs only for a `landing` finger: a sliding one costs
+    /// nothing.
+    fn inventory_spot(&mut self, batch: &HudBatch, p: (f32, f32), landing: bool) -> Option<Spot> {
         if self.screen == Screen::Creative {
             let (ox, oy) = Self::creative_origin(batch);
             let on_tab = self.creative_screen.tabs.iter().any(|t| {
@@ -200,7 +204,7 @@ impl Game<'_> {
             id: id as u32,
             filled,
             kind,
-            takes_one: kind == SlotKind::Normal && self.would_place_one(id),
+            takes_one: landing && kind == SlotKind::Normal && self.would_place_one(id),
         }))
     }
 
