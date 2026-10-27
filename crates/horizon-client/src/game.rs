@@ -5612,25 +5612,25 @@ impl Game<'_> {
             self.draw_inventory_player(batch, ox, oy);
         }
         // `AbstractRecipeBookScreen.extractRenderState`: under a book covering the menu, only the
-        // background above draws (`extractBackground`), without `extractContents`' labels, slots
-        // and widgets.
+        // background above draws (`extractBackground`), without `extractContents`' labels, slots,
+        // hovered slot's highlight and widgets; the book draws over them.
         if !self.recipe_book_covers() {
             self.draw_inventory_labels(batch, ox, oy);
             self.draw_inventory_slots(batch, ox, oy);
+            if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
+                let (sx, sy) = self.slot_position(slot);
+                batch.fill(
+                    &self.gui.atlas,
+                    ox + sx,
+                    oy + sy,
+                    16.0,
+                    16.0,
+                    rgba(255, 255, 255, 128),
+                );
+            }
             self.draw_sort_buttons(batch, ox, oy);
         }
         let book_tooltip = self.draw_recipe_book(batch);
-        if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
-            let (sx, sy) = self.slot_position(slot);
-            batch.fill(
-                &self.gui.atlas,
-                ox + sx,
-                oy + sy,
-                16.0,
-                16.0,
-                rgba(255, 255, 255, 128),
-            );
-        }
         self.draw_carried(batch);
         self.draw_slot_tooltip(batch);
         if let Some(lines) = book_tooltip {

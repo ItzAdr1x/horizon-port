@@ -195,10 +195,12 @@ impl Game<'_> {
     /// The book takes every press, which none of the menu's slots, buttons or beyond-the-panel
     /// gets: while it covers the menu (`AbstractRecipeBookScreen.mouseClicked`), and while it
     /// shows a recipe's alternatives on any width, where a press beside them only hides them
-    /// (`RecipeBookPage.mouseClicked`). Hover stays the menu's (`slot_at`).
+    /// (`RecipeBookPage.mouseClicked`), but not a spectator's, whose book takes no click
+    /// (`RecipeBookComponent.mouseClicked`). Hover stays the menu's (`slot_at`).
     pub(super) fn recipe_book_takes_pointer(&self) -> bool {
         self.recipe_book_open() == Some(true)
-            && (self.recipe_ui.overlay.is_some() || self.recipe_book_covers())
+            && ((self.recipe_ui.overlay.is_some() && !self.spectator())
+                || self.recipe_book_covers())
     }
     /// A press of a button the book has no use for: the alternatives hide.
     pub(super) fn recipe_book_hide_alternatives(&mut self) {
