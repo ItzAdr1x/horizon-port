@@ -376,7 +376,13 @@ impl Game<'_> {
     }
     fn sort_input(&mut self, name: &str) -> bool {
         let e = &self.settings.extras;
-        if !e.sort || e.sort_key != name || self.recipe_search_focused() {
+        // A book taking the pointer leaves the slots out of reach: hidden under it, or behind
+        // its alternatives.
+        if !e.sort
+            || e.sort_key != name
+            || self.recipe_search_focused()
+            || self.recipe_book_takes_pointer()
+        {
             return false;
         }
         let buttons = self.sort_buttons();

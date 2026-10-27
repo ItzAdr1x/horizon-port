@@ -48,7 +48,6 @@ fn playing(movement: Movement) -> (Touch, Layout, Instant) {
     let context = Context {
         mode: Mode::Playing,
         movement,
-        hud_visible: true,
         ..Context::default()
     };
     assert!(touch.frame(context, now).is_empty());
@@ -427,7 +426,7 @@ fn the_hidden_hotbar_answers_no_taps_and_hiding_it_ends_a_finger_on_it() {
     let slot = |i: f64| [(171.0 + 1.0 + 20.0 * i + 10.0) * 5.0, 230.0 * 5.0];
     touch.finger(&layout, 1, Phase::Start, slot(0.0), now);
     let hidden = Context {
-        hud_visible: false,
+        hud_hidden: true,
         ..touch.context
     };
     assert!(touch.frame(hidden, now).is_empty());

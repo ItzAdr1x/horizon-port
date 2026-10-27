@@ -36,9 +36,16 @@ fn event(id: u64, phase: Phase, at: [f64; 2], here: Here) -> TouchEvent {
     }
 }
 
+/// A slot; an empty one of the menu's own takes one item from a stack in hand, and a filled one
+/// holds another item.
 fn slot_of(id: u32, filled: bool, kind: SlotKind) -> Here {
     Here {
-        spot: Spot::Slot(SlotSpot { id, filled, kind }),
+        spot: Spot::Slot(SlotSpot {
+            id,
+            filled,
+            kind,
+            takes_one: !filled && kind == SlotKind::Normal,
+        }),
         ..Here::default()
     }
 }
@@ -1019,6 +1026,35 @@ fn the_ring_fills_toward_the_next_item_and_not_over_a_blocked_slot() {
     tick(&mut touch, ms(now, 250));
     touch.placed(1, PlaceResult::Blocked);
     assert_eq!(marks_near(&touch, &layout, A, ms(now, 400)), 0);
+}
+
+#[test]
+fn the_first_ring_fills_only_where_an_item_will_land() {
+    let (mut touch, layout, now) = holding();
+    let refuses = Here {
+        spot: Spot::Slot(SlotSpot {
+            id: 3,
+            filled: false,
+            kind: SlotKind::Normal,
+            takes_one: false,
+        }),
+        ..Here::default()
+    };
+    touch.on(&layout, event(1, Phase::Start, A, refuses), now);
+    assert_eq!(marks_near(&touch, &layout, A, ms(now, 100)), 0);
+    assert_eq!(tick(&mut touch, ms(now, 250)), [place(3, A)]);
+    touch.placed(1, PlaceResult::Blocked);
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, A, refuses), ms(now, 300)),
+        [Input::Pointer(A), Input::Pointer(AWAY)]
+    );
+    let (mut touch, layout, now) = holding();
+    touch.on(&layout, event(1, Phase::Start, A, slot(3)), now);
+    assert_eq!(
+        marks_near(&touch, &layout, A, ms(now, 100)),
+        0,
+        "another item"
+    );
 }
 
 #[test]

@@ -674,8 +674,7 @@ impl Game<'_> {
     // ---- clicks ----
 
     /// A click while a screen with a recipe book is open; true when the book
-    /// used it. A book covering the menu takes every click, used or not
-    /// (`AbstractRecipeBookScreen.mouseClicked`).
+    /// used it.
     pub(super) fn recipe_book_click(&mut self, right: bool) -> bool {
         let Some(book_type) = self.active_book() else {
             return false;
@@ -722,7 +721,7 @@ impl Game<'_> {
             return true;
         }
         if !open {
-            return covers;
+            return false;
         }
         let (xo, yo) = self.book_origin(&batch);
         let pages = self.recipe_ui.view.buttons.len().div_ceil(20);
@@ -802,7 +801,7 @@ impl Game<'_> {
                 return true;
             }
         }
-        covers
+        false
     }
     /// A recipe button at `p` (GUI pixels) with more than one recipe: its right click opens the
     /// alternatives.

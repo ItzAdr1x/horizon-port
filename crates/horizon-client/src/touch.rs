@@ -112,8 +112,8 @@ pub struct Context {
     pub held_item_used_over_time: bool,
     /// An inventory is open: the Shift button is there.
     pub slots: bool,
-    /// The HUD is drawn (F1 hides it): the hotbar's slots answer taps.
-    pub hud_visible: bool,
+    /// F1 hid the HUD: the hotbar's slots answer no taps.
+    pub hud_hidden: bool,
     /// The hand holds a stack over an open inventory: taps place it, holds place one at a
     /// time, drags spread it.
     pub carrying: bool,
@@ -353,7 +353,7 @@ impl Touch {
         if !context.slots {
             self.menus.shift.latch = menu::Latch::Off;
         }
-        if context.hud_visible != self.context.hud_visible {
+        if context.hud_hidden != self.context.hud_hidden {
             for finger in &mut self.fingers {
                 if matches!(finger.role, Role::Hotbar) {
                     finger.role = Role::Spent;
@@ -403,7 +403,7 @@ impl Touch {
                 return role;
             }
         }
-        if self.context.hud_visible
+        if !self.context.hud_hidden
             && let Some(slot) = layout.hotbar_slot(px)
         {
             out.push(Input::Hotbar(slot));

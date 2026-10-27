@@ -9,8 +9,8 @@ use horizon_client::{
     hud::HudBatch,
     keymapping::{SNEAK, SPRINT},
     touch::{
-        self as fingers, Context, Function, Here, Input, Layout, Mode, Phase, PlaceResult,
-        SlotKind, SlotSpot, Spot, TouchEvent,
+        self as fingers, Context, Function, Here, Input, Layout, Mode, Phase, PlaceOne,
+        PlaceResult, SlotKind, SlotSpot, Spot, TouchEvent,
     },
     widgets::{self, Kind},
 };
@@ -172,6 +172,7 @@ impl Game<'_> {
                     id: TRASH,
                     filled: false,
                     kind: SlotKind::Trash,
+                    takes_one: false,
                 }));
             }
             if self.creative_screen.inside_scrollbar(p.0 - ox, p.1 - oy) {
@@ -199,7 +200,121 @@ impl Game<'_> {
             id: id as u32,
             filled,
             kind,
+            takes_one: kind == SlotKind::Normal && self.would_place_one(id),
         }))
+    }
+
+    /// Whether the mouse's plain right click on slot `slot` would move exactly one item from
+    /// the hand into it: the menu engine's own click, run on a copy. Not shifted, not inside a
+    /// drag of the mouse's, not one Mouse Tweaks takes over; false with an empty hand.
+    fn would_place_one(&mut self, slot: usize) -> bool {
+        if self.carried.is_none()
+            || self.has_shift_down()
+            || self.inv.drag.is_some()
+            || self.inv.clicks.quick_crafting().is_some()
+            || self.tweaks_on()
+        {
+            return false;
+        }
+        let mut takes = false;
+        self.menu_session(|menu, env, to_menu| {
+            takes = to_menu(slot).is_some_and(|s| menu.would_place_one(env, s));
+            Some(false)
+        });
+        takes
+    }
+
+    /// The mouse's `button` clicked at `at` (physical pixels): moved there, pressed and released.
+    fn touch_click(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        id: WindowId,
+        device_id: DeviceId,
+        at: [f64; 2],
+        button: MouseButton,
+    ) {
+        let input = |state| WindowEvent::MouseInput {
+            device_id,
+            state,
+            button,
+        };
+        for event in [
+            WindowEvent::CursorMoved {
+                device_id,
+                position: PhysicalPosition::new(at[0], at[1]),
+            },
+            input(ElementState::Pressed),
+            input(ElementState::Released),
+        ] {
+            self.window_event(event_loop, id, event);
+        }
+    }
+
+    /// A touch drag's stack put down at `at` (physical pixels): a left click there while the
+    /// hand holds a stack.
+    fn inventory_put_down(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        id: WindowId,
+        device_id: DeviceId,
+        at: [f64; 2],
+    ) {
+        if self.carried.is_none() {
+            return;
+        }
+        self.inv.last_click = None;
+        self.touch_click(event_loop, id, device_id, at, MouseButton::Left);
+    }
+
+    /// A painting finger's one item into the slot it aims at: the mouse's right click at its
+    /// point (physical pixels), sent only when that slot is still under it and the click moves
+    /// exactly one item from the hand into that slot (`would_place_one`), and then read back. On
+    /// every path the click changes the hand at once: the server's copy is predicted
+    /// (`remote_menu_ops`).
+    fn inventory_place_one(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        id: WindowId,
+        device_id: DeviceId,
+        place: PlaceOne,
+    ) -> PlaceResult {
+        let (Some(batch), Some(carried)) = (self.gui_scale(), self.carried.clone()) else {
+            return PlaceResult::Ended;
+        };
+        if !self.inventory_open() {
+            return PlaceResult::Ended;
+        }
+        if self.recipe_book_takes_pointer() {
+            return PlaceResult::Blocked;
+        }
+        // A window resized, folded or unfolded since the finger aimed moves the slots under it.
+        let (at, slot) = (place.at, place.slot as usize);
+        let under = self.slot_at(
+            &batch,
+            at[0] as f32 / batch.scale,
+            at[1] as f32 / batch.scale,
+        );
+        if under != Some(slot) {
+            return PlaceResult::Ended;
+        }
+        if !self.would_place_one(slot) {
+            return PlaceResult::Blocked;
+        }
+        let was = self.slot_view(slot);
+        self.inv.last_click = None;
+        self.touch_click(event_loop, id, device_id, at, MouseButton::Right);
+        let now = self.slot_view(slot);
+        let moved = horizon_client::menu::moved_one(
+            &carried,
+            self.carried.as_ref(),
+            was.as_ref(),
+            now.as_ref(),
+        );
+        if moved && self.carried.is_some() {
+            PlaceResult::Placed
+        } else {
+            PlaceResult::Ended
+        }
     }
 
     /// Where the carried stack is drawn (`draw_carried`): under the pointer, or, while a touch
@@ -231,7 +346,7 @@ impl Game<'_> {
             flying: self.player.as_ref().is_some_and(|p| p.flying),
             held_item_used_over_time: self.held_item_used_over_time(),
             slots,
-            hud_visible: !self.ui.hide_gui,
+            hud_hidden: self.ui.hide_gui,
             carrying: slots && self.carried.is_some(),
         }
     }

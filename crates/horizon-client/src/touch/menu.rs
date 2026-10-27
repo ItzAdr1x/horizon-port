@@ -53,6 +53,9 @@ pub struct SlotSpot {
     pub id: u32,
     pub filled: bool,
     pub kind: SlotKind,
+    /// With a stack in hand, the right click here would put exactly one item in, as the game's
+    /// menu says; false with an empty hand.
+    pub takes_one: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -415,6 +418,16 @@ pub(super) fn hold(landed: &Here, carrying: bool, shifted: bool) -> Hold {
         },
         Spot::Secondary => Hold::Click(MouseButton::Right),
         _ => Hold::Nothing,
+    }
+}
+
+/// Whether a ring fills toward what a hold where the finger landed does: never where it does
+/// nothing, and with a stack in hand only where an item will land.
+pub(super) fn hold_rings(landed: &Here, carrying: bool, shifted: bool) -> bool {
+    match hold(landed, carrying, shifted) {
+        Hold::Nothing | Hold::Done => false,
+        Hold::Paint(_) => matches!(landed.spot, Spot::Slot(s) if s.takes_one),
+        Hold::Press(_) | Hold::Click(_) => true,
     }
 }
 

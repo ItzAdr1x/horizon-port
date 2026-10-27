@@ -215,7 +215,6 @@ mod tests {
         let now = Instant::now();
         let context = Context {
             mode: Mode::Playing,
-            hud_visible: true,
             ..Context::default()
         };
         assert!(touch.frame(context, now).is_empty());

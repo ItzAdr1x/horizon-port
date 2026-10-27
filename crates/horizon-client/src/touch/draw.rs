@@ -4,7 +4,7 @@
 
 use super::functions::Control;
 use super::layout::{Button, Cell, KNOB, Layout, Rect};
-use super::menu::{Gesture, Hold, Latch, hold, hold_time};
+use super::menu::{Gesture, Latch, hold_rings, hold_time};
 use super::{HOLD, Mode, Movement, Role, Touch};
 use crate::hud::{HudAtlas, HudBatch, rgba};
 use std::time::{Duration, Instant};
@@ -356,7 +356,7 @@ impl Touch {
                     from,
                     here,
                     held: false,
-                }) if !matches!(hold(here, carrying, shifted), Hold::Nothing | Hold::Done) => {
+                }) if hold_rings(here, carrying, shifted) => {
                     pen.ring(
                         *from,
                         now.duration_since(*landed),
