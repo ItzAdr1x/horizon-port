@@ -720,16 +720,41 @@ fn a_long_press_on_a_stack_takes_half_with_the_right_button() {
 }
 
 #[test]
-fn a_long_press_beyond_the_panel_drops_one_at_once_and_no_more() {
+fn a_long_press_beyond_the_panel_drops_one_where_it_lifts() {
     let (mut touch, layout, now, held) = long_press(holding(), spot(Spot::Outside));
-    assert_eq!(
-        held,
-        [Input::Pointer(A), right_down(), Input::Release(RIGHT)]
+    assert_eq!(held, [Input::Pointer(A), right_down()]);
+    assert!(
+        matches!(
+            touch.fingers[0].role,
+            Role::Menu(Gesture::Pressing {
+                press: Press::Drop,
+                outside: Some(A),
+                ..
+            })
+        ),
+        "the drop hint shows over the finger"
     );
     assert!(tick(&mut touch, now + Duration::from_secs(5)).is_empty());
     assert_eq!(
         touch.on(&layout, event(1, Phase::End, A, spot(Spot::Outside)), now),
-        [Input::Pointer(A), Input::Pointer(AWAY)]
+        [
+            Input::Pointer(A),
+            Input::Release(RIGHT),
+            Input::Pointer(AWAY)
+        ]
+    );
+}
+
+#[test]
+fn a_cancelled_long_press_beyond_the_panel_drops_nothing() {
+    let (mut touch, layout, now, _) = long_press(holding(), spot(Spot::Outside));
+    assert_eq!(
+        touch.on(
+            &layout,
+            event(1, Phase::Cancel, A, spot(Spot::Outside)),
+            now
+        ),
+        [Input::Abort(RIGHT), Input::Pointer(AWAY)]
     );
 }
 
@@ -799,7 +824,7 @@ fn hold_decides_from_where_it_landed() {
     assert_eq!(hold(&empty(3), false), Hold::Nothing);
     assert_eq!(hold(&empty(3), true), Hold::Paint(3));
     assert_eq!(hold(&slot(3), true), Hold::Paint(3));
-    assert_eq!(hold(&spot(Spot::Outside), true), Hold::Click(RIGHT));
+    assert_eq!(hold(&spot(Spot::Outside), true), Hold::Press(Press::Drop));
     assert_eq!(hold(&spot(Spot::Outside), false), Hold::Nothing);
     let result = slot_of(200, true, SlotKind::Result);
     assert_eq!(hold(&result, false), Hold::Click(RIGHT));

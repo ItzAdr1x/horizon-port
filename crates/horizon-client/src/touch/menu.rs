@@ -365,12 +365,15 @@ pub(super) enum Press {
     Spread,
     /// The right button on a stack, under an empty hand: half of it taken (PICKUP 1).
     Split,
+    /// The right button with a stack in hand beyond the panel: one item dropped where the finger
+    /// lifts (slot -999), none if the touch is cancelled first.
+    Drop,
 }
 
 impl Press {
     fn button(self) -> MouseButton {
         match self {
-            Press::Split => MouseButton::Right,
+            Press::Split | Press::Drop => MouseButton::Right,
             Press::Plain | Press::Carry { .. } | Press::Spread => MouseButton::Left,
         }
     }
@@ -406,8 +409,7 @@ pub(super) fn hold(landed: &Here, carrying: bool, shifted: bool) -> Hold {
             SlotKind::Normal => Hold::Paint(s.id),
             SlotKind::Result | SlotKind::Display | SlotKind::Trash => Hold::Done,
         },
-        // Beyond the panel, one item is dropped (slot -999).
-        Spot::Outside if carrying => Hold::Click(MouseButton::Right),
+        Spot::Outside if carrying => Hold::Press(Press::Drop),
         Spot::Slot(s) if s.filled => match s.kind {
             SlotKind::Normal => Hold::Press(Press::Split),
             // Vanilla's right click on the result takes one craft, as a left one does.
