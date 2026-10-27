@@ -372,9 +372,12 @@ impl Touch {
                         pen.plate(loupe.square, false);
                     }
                 }
-                Role::Menu(Gesture::Pressing {
-                    outside: Some(at), ..
-                }) => {
+                Role::Menu(
+                    Gesture::Pressing {
+                        outside: Some(at), ..
+                    }
+                    | Gesture::Dropping { outside: Some(at) },
+                ) => {
                     let hint = pen.layout.above([at[0] as f32, at[1] as f32]);
                     pen.button(hint, false, DROP, Turn::Up);
                 }

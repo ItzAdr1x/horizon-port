@@ -143,6 +143,13 @@ pub(super) enum Gesture {
     /// between items, so a lift, a cancel or a scene change has nothing to undo, and it never
     /// becomes a drag.
     Painting(Paint),
+    /// A stack in hand held still beyond the panel: one item is thrown if the finger lifts
+    /// beyond it too. No button is down until then, so a slot the finger crosses or lifts on
+    /// gets no click, and a cancel or a scene change throws nothing.
+    Dropping {
+        /// Beyond the panel at this point, where lifting throws: the hint.
+        outside: Option<[f64; 2]>,
+    },
     /// A long press clicked already, or did all it will: lifting only hovers away.
     Done,
     /// On the Shift button.
@@ -365,15 +372,12 @@ pub(super) enum Press {
     Spread,
     /// The right button on a stack, under an empty hand: half of it taken (PICKUP 1).
     Split,
-    /// The right button with a stack in hand beyond the panel: one item dropped where the finger
-    /// lifts (slot -999), none if the touch is cancelled first.
-    Drop,
 }
 
 impl Press {
     fn button(self) -> MouseButton {
         match self {
-            Press::Split | Press::Drop => MouseButton::Right,
+            Press::Split => MouseButton::Right,
             Press::Plain | Press::Carry { .. } | Press::Spread => MouseButton::Left,
         }
     }
@@ -393,6 +397,8 @@ pub(super) enum Hold {
     Click(MouseButton),
     /// One item from the hand on this slot, then more (`Gesture::Painting`).
     Paint(u32),
+    /// One item from the hand thrown if the finger lifts beyond the panel (`Gesture::Dropping`).
+    Drop,
     /// Nothing, and no tap at the lift either: a stack in hand held on a slot nothing goes on,
     /// where a click would craft, copy or destroy.
     Done,
@@ -409,7 +415,7 @@ pub(super) fn hold(landed: &Here, carrying: bool, shifted: bool) -> Hold {
             SlotKind::Normal => Hold::Paint(s.id),
             SlotKind::Result | SlotKind::Display | SlotKind::Trash => Hold::Done,
         },
-        Spot::Outside if carrying => Hold::Press(Press::Drop),
+        Spot::Outside if carrying => Hold::Drop,
         Spot::Slot(s) if s.filled => match s.kind {
             SlotKind::Normal => Hold::Press(Press::Split),
             // Vanilla's right click on the result takes one craft, as a left one does.
@@ -429,7 +435,7 @@ pub(super) fn hold_rings(landed: &Here, carrying: bool, shifted: bool) -> bool {
     match hold(landed, carrying, shifted) {
         Hold::Nothing | Hold::Done => false,
         Hold::Paint(_) => matches!(landed.spot, Spot::Slot(s) if s.takes_one),
-        Hold::Press(_) | Hold::Click(_) => true,
+        Hold::Press(_) | Hold::Click(_) | Hold::Drop => true,
     }
 }
 
@@ -679,6 +685,7 @@ impl Touch {
             Gesture::Pressing { press, outside, .. } => {
                 *outside = (press.throws() && here.spot == Spot::Outside).then_some(at);
             }
+            Gesture::Dropping { outside } => *outside = (here.spot == Spot::Outside).then_some(at),
             Gesture::Painting(_) if self.paint_stops() => *gesture = Gesture::Done,
             Gesture::Painting(paint) => paint.slide(finger, at, &here, layout, now, out),
             _ => {}
@@ -791,6 +798,12 @@ impl Touch {
                 }
             }
             Gesture::Pressing { press, shifted, .. } => release(out, press.button(), shifted),
+            // The right button's click on slot -999 throws one item. It ignores Shift, so the
+            // latch stays for the next click.
+            Gesture::Dropping { .. } if here.spot == Spot::Outside => {
+                click(out, MouseButton::Right, true)
+            }
+            Gesture::Dropping { .. } => {}
             // Every item already landed: the lift only hovers away.
             Gesture::Painting(_) | Gesture::Scrolling { .. } | Gesture::Done | Gesture::Shift => {}
         }
@@ -830,6 +843,11 @@ impl Touch {
             match hold(&here, carrying, shifted) {
                 Hold::Paint(slot) => {
                     *gesture = Gesture::Painting(Paint::start(finger.id, slot, from, now, out));
+                }
+                Hold::Drop => {
+                    *gesture = Gesture::Dropping {
+                        outside: Some(from),
+                    }
                 }
                 Hold::Press(press) => {
                     let shifted = self.menus.shift.take(true);

@@ -719,43 +719,106 @@ fn a_long_press_on_a_stack_takes_half_with_the_right_button() {
     );
 }
 
+/// The right button clicked at `at`, unshifted: beyond the panel, one item thrown.
+fn thrown(at: [f64; 2]) -> [Input; 4] {
+    [
+        Input::Pointer(at),
+        right_down(),
+        Input::Release(RIGHT),
+        Input::Pointer(AWAY),
+    ]
+}
+
+/// Where finger 1 shows the drop hint, if it does.
+fn drop_hint(touch: &Touch) -> Option<[f64; 2]> {
+    match touch.fingers[0].role {
+        Role::Menu(Gesture::Dropping { outside }) => outside,
+        _ => None,
+    }
+}
+
 #[test]
 fn a_long_press_beyond_the_panel_drops_one_where_it_lifts() {
     let (mut touch, layout, now, held) = long_press(holding(), spot(Spot::Outside));
-    assert_eq!(held, [Input::Pointer(A), right_down()]);
-    assert!(
-        matches!(
-            touch.fingers[0].role,
-            Role::Menu(Gesture::Pressing {
-                press: Press::Drop,
-                outside: Some(A),
-                ..
-            })
-        ),
-        "the drop hint shows over the finger"
-    );
+    assert_eq!(held, [], "no button is down while the finger stays");
+    assert_eq!(drop_hint(&touch), Some(A));
     assert!(tick(&mut touch, now + Duration::from_secs(5)).is_empty());
     assert_eq!(
         touch.on(&layout, event(1, Phase::End, A, spot(Spot::Outside)), now),
-        [
-            Input::Pointer(A),
-            Input::Release(RIGHT),
-            Input::Pointer(AWAY)
-        ]
+        thrown(A)
     );
 }
 
 #[test]
-fn a_cancelled_long_press_beyond_the_panel_drops_nothing() {
-    let (mut touch, layout, now, _) = long_press(holding(), spot(Spot::Outside));
+fn a_long_press_beyond_the_panel_cancelled_or_left_behind_drops_nothing() {
+    let outside = spot(Spot::Outside);
+    let (mut touch, layout, now, _) = long_press(holding(), outside);
     assert_eq!(
-        touch.on(
-            &layout,
-            event(1, Phase::Cancel, A, spot(Spot::Outside)),
-            now
-        ),
-        [Input::Abort(RIGHT), Input::Pointer(AWAY)]
+        touch.on(&layout, event(1, Phase::Cancel, A, outside), now),
+        [Input::Pointer(AWAY)]
     );
+    let (mut touch, layout, now, _) = long_press(holding(), outside);
+    let next = next_scene(&touch);
+    assert_eq!(touch.frame(next, now), [Input::Pointer(AWAY)]);
+    assert_eq!(
+        touch.touch(&layout, next, event(1, Phase::End, A, outside), now),
+        []
+    );
+}
+
+#[test]
+fn a_long_press_beyond_the_panel_lifted_back_on_it_clicks_nothing() {
+    let another_item = slot(3);
+    let result = slot_of(200, true, SlotKind::Result);
+    for over in [another_item, result, empty(4)] {
+        let (mut touch, layout, now, _) = long_press(holding(), spot(Spot::Outside));
+        assert_eq!(
+            touch.on(&layout, event(1, Phase::Move, B, over), now),
+            [Input::Pointer(B)]
+        );
+        assert_eq!(drop_hint(&touch), None, "{over:?}");
+        assert_eq!(
+            touch.on(&layout, event(1, Phase::End, B, over), now),
+            [Input::Pointer(B), Input::Pointer(AWAY)],
+            "{over:?}"
+        );
+    }
+}
+
+#[test]
+fn a_long_press_beyond_the_panel_carried_across_slots_drops_one_and_touches_none() {
+    let (mut touch, layout, now, _) = long_press(holding(), spot(Spot::Outside));
+    let path = [
+        ([1100.0, 800.0], empty(3)),
+        ([1160.0, 800.0], empty(4)),
+        ([1220.0, 800.0], slot(5)),
+        (B, spot(Spot::Outside)),
+    ];
+    for (i, (at, over)) in (1..).zip(path) {
+        assert_eq!(
+            touch.on(&layout, event(1, Phase::Move, at, over), now),
+            [Input::Pointer(at)]
+        );
+        assert!(tick(&mut touch, ms(now, 1000 * i)).is_empty(), "{over:?}");
+    }
+    assert_eq!(drop_hint(&touch), Some(B));
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, B, spot(Spot::Outside)), now),
+        thrown(B)
+    );
+}
+
+#[test]
+fn a_long_press_beyond_the_panel_leaves_the_shift_latch_for_the_next_click() {
+    let (mut touch, layout, now) = inventory();
+    hand(&mut touch, true, now);
+    tap_shift(&mut touch, &layout, now);
+    let (mut touch, layout, now, _) = long_press((touch, layout, now), spot(Spot::Outside));
+    assert_eq!(
+        touch.on(&layout, event(1, Phase::End, A, spot(Spot::Outside)), now),
+        thrown(A)
+    );
+    assert!(tap_shifted(&mut touch, &layout, 2, slot(3), now));
 }
 
 #[test]
@@ -824,7 +887,7 @@ fn hold_decides_from_where_it_landed() {
     assert_eq!(hold(&empty(3), false), Hold::Nothing);
     assert_eq!(hold(&empty(3), true), Hold::Paint(3));
     assert_eq!(hold(&slot(3), true), Hold::Paint(3));
-    assert_eq!(hold(&spot(Spot::Outside), true), Hold::Press(Press::Drop));
+    assert_eq!(hold(&spot(Spot::Outside), true), Hold::Drop);
     assert_eq!(hold(&spot(Spot::Outside), false), Hold::Nothing);
     let result = slot_of(200, true, SlotKind::Result);
     assert_eq!(hold(&result, false), Hold::Click(RIGHT));
