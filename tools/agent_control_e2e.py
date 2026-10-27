@@ -628,7 +628,24 @@ def touch_scenario(d, out):
         up(finger, at)
         assert menu() == before, (slot, menu())
 
-    # 3. A recipe's alternatives, open beside the wide inventory, take a held finger and a tap:
+    # 3. A long press beyond the panel throws one item only where it lifts beyond the panel:
+    # lifted back on the grid, over another item, it changes nothing; lifted beyond, one leaves
+    # the hand.
+    beyond = (12, d('ui')['gui_size'][1] / 2)
+    finger = down(beyond)
+    time.sleep(0.8)
+    assert menu() == before, menu()
+    up(finger, slot_at(100))
+    assert menu() == before, ('lifted back on the grid', menu())
+    finger = down(beyond)
+    time.sleep(0.8)
+    up(finger, beyond)
+    before = dict(before, hand={'item': 'minecraft:birch_log', 'count': 1})
+    deadline = time.time() + 2
+    while menu() != before:
+        assert time.time() < deadline, ('lifted beyond the panel', menu())
+
+    # 4. A recipe's alternatives, open beside the wide inventory, take a held finger and a tap:
     # nothing goes on a grid slot, and the tap only hides them.
     book = d('screen')['recipe_book']['targets']
     tap(middle(book[0]))
@@ -657,7 +674,7 @@ def touch_scenario(d, out):
         assert d('screen')['slots'] == slots and menu() == before, (right, menu())
         assert d('state')['scene'] == closed, f'the click (right: {right}) beside the alternatives hid them'
 
-    # 4. The automatic GUI scale is narrow: the open book covers the inventory and a held stack
+    # 5. The automatic GUI scale is narrow: the open book covers the inventory and a held stack
     # puts nothing under it (cancelled: a tap there would choose whatever recipe covers the slot);
     # Escape, where the touch Back button and the pad's B lead too, hides the book and leaves the
     # inventory open.
