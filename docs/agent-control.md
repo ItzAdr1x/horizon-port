@@ -283,8 +283,8 @@ turn the switch off.
   - `survival`, `ui`, `options`, `events`, `consume`, `pick`, `suggestions`;
   - `manage`: worlds, servers, effects, books, LAN, the options pages and `confirm`;
   - `touch` (CLI only): a held stack painted into the crafting grid one item at a time, nothing on
-    another item, the result or under a recipe's alternatives, and Escape hiding a recipe book that
-    covers a narrow inventory;
+    another item, the result or under a recipe's alternatives (from a finger or the mouse), and
+    Escape hiding a recipe book that covers a narrow inventory;
   - `no-ai`: every surface refuses;
   - `setting`: Agent Control on opens the endpoint, the AI Agent page, Copy, and off closes it.
 - **`tools/launcher_mcp_e2e.py`** drives `horizon-launcher mcp`: the generated tools, `play` and

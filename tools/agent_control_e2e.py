@@ -13,9 +13,10 @@ pick scenario middle-clicks slots (AbstractContainerScreen's cloning): a full st
 the hotbar and from an item tab, and nothing in survival; the suggestions scenario checks
 slash-command Tab completion on single player's connected client after a fresh launch; the touch
 scenario (CLI only) puts fingers on the inventory: a held stack painted into the crafting grid one
-item at a time, nothing on another item, the result or under a recipe's alternatives, and Escape
-hiding a recipe book that covers a narrow inventory; the no-ai scenario turns No AI on in a scratch
-game home and checks that horizon-ctl, its MCP server and the game's control socket all refuse.
+item at a time, nothing on another item, the result or under a recipe's alternatives (from a finger
+or the mouse), and Escape hiding a recipe book that covers a narrow inventory; the no-ai scenario
+turns No AI on in a scratch game home and checks that horizon-ctl, its MCP server and the game's
+control socket all refuse.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
@@ -593,7 +594,8 @@ def touch_scenario(d, out):
     def count(stack):
         return stack['count'] if stack else 0
 
-    # 1. Three logs held on an empty grid slot go down one at a time while the finger stays.
+    # 1. Three logs held on an empty grid slot go down one at a time while the finger stays: one
+    # log on the slot and two in hand for the 450 ms before the second, then the others.
     tree = widgets(d)
     logs = next(w for w in tree.values() if w.get('stack') == oak(3))
     tap(middle(logs['bounds']))
@@ -601,14 +603,14 @@ def touch_scenario(d, out):
     grid = slot_at(100)
     finger = down(grid)
     counts, deadline = [], time.time() + 5
-    while True:
+    while not counts or counts[-1] < 3:
+        assert time.time() < deadline, f'the held finger put down {counts} in 5 s'
         now = menu()
         placed = count(now['100'])
         assert placed + count(now['hand']) == 3 and placed >= (counts or [0])[-1], (counts, now)
         counts.append(placed)
-        if placed == 3 or time.time() > deadline:
-            break
-    assert counts[-1] == 3, f'the held finger put down {counts}'
+    steps = [n for i, n in enumerate(counts) if i == 0 or n != counts[i - 1]]
+    assert 1 in steps, f'no reading had one log down and two in hand before the next: {steps}'
     up(finger, grid)
     painted = {'100': oak(3), '101': None, '200': planks, 'hand': None}
     assert menu() == painted, menu()
@@ -646,6 +648,14 @@ def touch_scenario(d, out):
     up(finger, at)
     assert menu() == before, menu()
     assert d('state')['scene'] == closed, 'the tap beside the alternatives hid them'
+    # The mouse's clicks there, left and right, do the same.
+    slots = d('screen')['slots']
+    for right in (False, True):
+        d('click_at', x=middle(recipe)[0], y=middle(recipe)[1], right=True)
+        assert d('state')['scene'] != closed, 'the recipe shows its alternatives again'
+        d('click_at', x=at[0], y=at[1], right=right)
+        assert d('screen')['slots'] == slots and menu() == before, (right, menu())
+        assert d('state')['scene'] == closed, f'the click (right: {right}) beside the alternatives hid them'
 
     # 4. The automatic GUI scale is narrow: the open book covers the inventory and a held stack
     # puts nothing under it (cancelled: a tap there would choose whatever recipe covers the slot);
@@ -664,7 +674,6 @@ def touch_scenario(d, out):
     state = d('state')
     assert state['screen'] == 'inventory' and state['recipe_book'] == {'presentation': 'closed', 'open': False}, state
     d('close')
-    steps = [n for i, n in enumerate(counts) if i == 0 or n != counts[i - 1]]
     return {'grid_while_held': steps, 'narrow_gui': width}
 
 
